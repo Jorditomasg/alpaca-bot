@@ -93,7 +93,7 @@ async def copy_task():
         try:
             # fetch_trades is sync (httpx.Client) — run in thread pool
             loop = asyncio.get_running_loop()
-            trades = await loop.run_in_executor(None, scraper.fetch_trades, 3)
+            trades = await loop.run_in_executor(None, scraper.fetch_trades)
         except Exception as e:
             print(f"[COPY] Scraper error: {e}")
             await asyncio.sleep(INTERVAL)
