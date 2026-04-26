@@ -36,7 +36,7 @@ alpaca-bot/
   trailing/        — trailing stop strategy + WebSocket stream
   copy/            — Capitol Trades scraper, scorer, portfolio manager
   wheel/           — options engine, monitor, daily summary
-  web/             — FastAPI dashboard (http://localhost:8080)
+  web/             — FastAPI dashboard (http://localhost:7080)
   data/            — runtime state (gitignored, persisted via Docker volume)
 ```
 
@@ -61,7 +61,7 @@ cp .env.example .env
 docker compose up -d --build
 
 # 4. Dashboard
-open http://localhost:8080
+open http://localhost:7080
 ```
 
 ## Environment Variables
@@ -89,6 +89,6 @@ See [setup guide](#setup) for full server installation steps.
 
 ## Dashboard
 
-Live status at `http://YOUR_SERVER_IP:8080` — auto-refreshes every 30 seconds.
+Live status at `http://YOUR_SERVER_IP:7080` — auto-refreshes every 30 seconds.
 
 Shows current state of all three strategies: positions, floors, premiums collected, and active contracts.
