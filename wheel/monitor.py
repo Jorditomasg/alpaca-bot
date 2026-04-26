@@ -2,7 +2,7 @@
 50% profit rule: if open option is worth ≤ 50% of premium received,
 close it early (buy to close) and trigger a new sell.
 """
-import alpaca_client
+from shared import alpaca_client
 import wheel.options as options_mod
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce

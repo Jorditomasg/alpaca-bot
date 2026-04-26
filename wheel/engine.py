@@ -8,7 +8,7 @@ ASSIGNED    → CALL_OPEN  : sell covered call
 CALL_OPEN   → IDLE       : call exercised (shares gone) → restart
 CALL_OPEN   → CALL_OPEN  : call expired worthless → sell new call
 """
-import alpaca_client
+from shared import alpaca_client
 import wheel.options as options_mod
 from alpaca.trading.requests import (
     MarketOrderRequest, LimitOrderRequest, GetOrdersRequest

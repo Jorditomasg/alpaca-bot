@@ -10,7 +10,7 @@ Returns the top politician's name.
 """
 from collections import defaultdict
 from datetime import datetime, timedelta
-import alpaca_client
+from shared import alpaca_client
 
 
 def score_and_pick(trades: list[dict]) -> str | None:

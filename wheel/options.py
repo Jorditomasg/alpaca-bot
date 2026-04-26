@@ -4,7 +4,7 @@ PUT  : ~10% OTM, 2-4 weeks out, highest premium
 CALL : ~10% above cost_basis, 2-4 weeks out, highest premium
 """
 from datetime import date, timedelta
-import alpaca_client
+from shared import alpaca_client
 from alpaca.trading.requests import GetOptionContractsRequest
 from alpaca.trading.enums import ContractType
 from alpaca.data.requests import OptionLatestQuoteRequest

@@ -1,6 +1,6 @@
 """Daily summary logged at market close (16:00 ET)."""
 from datetime import datetime
-import alpaca_client
+from shared import alpaca_client
 from alpaca.data.requests import StockLatestTradeRequest
 
 

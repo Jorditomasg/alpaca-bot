@@ -11,8 +11,8 @@ from datetime import datetime
 from dotenv import load_dotenv
 load_dotenv()
 
-import market_hours
-import trader as shared_trader
+from shared import market_hours
+from shared import trader as shared_trader
 import trailing.state   as trailing_state
 import trailing.strategy as trailing_strategy
 import trailing.stream   as trailing_stream

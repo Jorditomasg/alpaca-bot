@@ -3,7 +3,7 @@ Manages $100 total capital across N active positions.
 Each position gets an equal notional slice.
 Rebalances existing positions when a new one is added or one closes.
 """
-import alpaca_client
+from shared import alpaca_client
 from alpaca.trading.requests import MarketOrderRequest, GetOrdersRequest, ClosePositionRequest
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 
