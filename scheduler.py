@@ -112,9 +112,10 @@ async def copy_task():
             continue
 
         new_trades = copier.new_trades_to_copy(trades, following, state["seen_trade_ids"])
-        for t in new_trades:
-            portfolio.execute_new_trade(t, state)
-            state["seen_trade_ids"].append(t["id"])
+        if new_trades:
+            portfolio.execute_batch(new_trades, state)
+            for t in new_trades:
+                state["seen_trade_ids"].append(t["id"])
 
         copy_state_mod.save(state)
         await asyncio.sleep(INTERVAL)

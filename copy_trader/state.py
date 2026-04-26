@@ -15,7 +15,6 @@ def load() -> dict:
         "last_scored": None,
         "seen_trade_ids": [],
         "positions": {},
-        "total_capital": 100.0,
     }
 
 
