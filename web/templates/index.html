@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Alpaca Bot Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+    .pill-green  { @apply inline-block px-2 py-0.5 rounded text-xs bg-green-900 text-green-300; }
+    .pill-yellow { @apply inline-block px-2 py-0.5 rounded text-xs bg-yellow-900 text-yellow-300; }
+    .pill-red    { @apply inline-block px-2 py-0.5 rounded text-xs bg-red-900 text-red-300; }
+  </style>
+</head>
+<body class="bg-zinc-950 text-zinc-100 min-h-screen p-8">
+
+  <header class="mb-8 flex items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-bold tracking-tight text-white">Alpaca Bot</h1>
+      <p class="text-zinc-500 text-sm mt-1">Paper Trading Dashboard</p>
+    </div>
+    <div class="text-right">
+      <div id="clock" class="text-zinc-400 text-sm"></div>
+      <div id="refresh-status" class="text-zinc-600 text-xs mt-1">refreshing every 30s</div>
+    </div>
+  </header>
+
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+
+    <!-- Trailing Stop -->
+    <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-sm font-semibold text-zinc-300 uppercase tracking-widest">Trailing Stop</h2>
+        <span id="t-badge" class="text-xs px-2 py-0.5 rounded bg-zinc-800 text-zinc-500">—</span>
+      </div>
+      <div class="space-y-3 text-sm">
+        <div class="flex justify-between"><span class="text-zinc-500">Symbol</span><span id="t-symbol" class="text-white font-medium">—</span></div>
+        <div class="flex justify-between"><span class="text-zinc-500">Entry</span><span id="t-entry" class="text-white">—</span></div>
+        <div class="flex justify-between"><span class="text-zinc-500">Floor</span><span id="t-floor" class="text-amber-400">—</span></div>
+        <div class="flex justify-between"><span class="text-zinc-500">Position</span><span id="t-qty" class="text-white">—</span></div>
+        <div class="flex justify-between"><span class="text-zinc-500">Trailing</span><span id="t-trailing" class="text-white">—</span></div>
+        <div class="flex justify-between"><span class="text-zinc-500">High mark</span><span id="t-hwm" class="text-green-400">—</span></div>
+      </div>
+    </div>
+
+    <!-- Copy Trader -->
+    <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-sm font-semibold text-zinc-300 uppercase tracking-widest">Copy Trader</h2>
+        <span id="c-badge" class="text-xs px-2 py-0.5 rounded bg-zinc-800 text-zinc-500">—</span>
+      </div>
+      <div class="space-y-3 text-sm">
+        <div class="flex justify-between"><span class="text-zinc-500">Following</span><span id="c-following" class="text-white font-medium truncate max-w-32">—</span></div>
+        <div class="flex justify-between"><span class="text-zinc-500">Capital</span><span id="c-capital" class="text-white">—</span></div>
+        <div class="flex justify-between"><span class="text-zinc-500">Positions</span><span id="c-positions" class="text-white">—</span></div>
+        <div class="flex justify-between"><span class="text-zinc-500">Last scored</span><span id="c-scored" class="text-zinc-400 text-xs">—</span></div>
+      </div>
+      <div id="c-tickers" class="mt-4 flex flex-wrap gap-2"></div>
+    </div>
+
+    <!-- Wheel Strategy -->
+    <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-sm font-semibold text-zinc-300 uppercase tracking-widest">Wheel</h2>
+        <span id="w-badge" class="text-xs px-2 py-0.5 rounded bg-zinc-800 text-zinc-500">—</span>
+      </div>
+      <div class="space-y-3 text-sm">
+        <div class="flex justify-between"><span class="text-zinc-500">Symbol</span><span id="w-symbol" class="text-white font-medium">—</span></div>
+        <div class="flex justify-between"><span class="text-zinc-500">Stage</span><span id="w-stage" class="text-white">—</span></div>
+        <div class="flex justify-between"><span class="text-zinc-500">Contract</span><span id="w-contract" class="text-zinc-400 text-xs truncate max-w-40">—</span></div>
+        <div class="flex justify-between"><span class="text-zinc-500">Strike / Expiry</span><span id="w-strike" class="text-white">—</span></div>
+        <div class="flex justify-between"><span class="text-zinc-500">Shares</span><span id="w-shares" class="text-white">—</span></div>
+        <div class="flex justify-between"><span class="text-zinc-500">Cost basis</span><span id="w-basis" class="text-white">—</span></div>
+        <div class="flex justify-between border-t border-zinc-800 pt-3"><span class="text-zinc-500">Total premium</span><span id="w-premium" class="text-green-400 font-semibold">—</span></div>
+        <div class="flex justify-between"><span class="text-zinc-500">Cycles</span><span id="w-cycles" class="text-zinc-300">—</span></div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    const fmt = (v, prefix='$') => v != null ? `${prefix}${Number(v).toFixed(2)}` : '—';
+    const badge = (active, label) => {
+      const cls = active ? 'bg-green-900 text-green-400' : 'bg-zinc-800 text-zinc-500';
+      return `<span class="text-xs px-2 py-0.5 rounded ${cls}">${active ? label : 'IDLE'}</span>`;
+    };
+
+    async function refresh() {
+      try {
+        const r = await fetch('/api/status');
+        const d = await r.json();
+        const { trailing: t, copy: c, wheel: w } = d;
+
+        // Trailing Stop
+        document.getElementById('t-badge').outerHTML    = `<span id="t-badge">${badge(t.active, 'ACTIVE')}</span>`;
+        document.getElementById('t-symbol').textContent  = t.symbol || '—';
+        document.getElementById('t-entry').textContent   = fmt(t.entry_price);
+        document.getElementById('t-floor').textContent   = fmt(t.floor);
+        document.getElementById('t-qty').textContent     = t.position_qty ? `${t.position_qty} shares` : '—';
+        document.getElementById('t-trailing').textContent = t.trailing_active ? '✓ Active' : '⏳ Waiting +10%';
+        document.getElementById('t-hwm').textContent     = fmt(t.high_watermark);
+
+        // Copy Trader
+        document.getElementById('c-badge').outerHTML    = `<span id="c-badge">${badge(c.active, 'ACTIVE')}</span>`;
+        document.getElementById('c-following').textContent = c.following || '—';
+        document.getElementById('c-capital').textContent  = `$${c.total_capital}`;
+        const nPos = Object.keys(c.positions || {}).length;
+        document.getElementById('c-positions').textContent = nPos ? `${nPos} open` : '—';
+        document.getElementById('c-scored').textContent   = c.last_scored ? c.last_scored.substring(0,16) : '—';
+        const tickers = document.getElementById('c-tickers');
+        tickers.innerHTML = Object.keys(c.positions || {})
+          .map(sym => `<span class="bg-blue-900 text-blue-300 text-xs px-2 py-0.5 rounded">${sym}</span>`)
+          .join('');
+
+        // Wheel
+        const stageColor = { IDLE: 'text-zinc-400', PUT_OPEN: 'text-blue-400',
+                             ASSIGNED: 'text-amber-400', CALL_OPEN: 'text-purple-400' };
+        document.getElementById('w-badge').outerHTML    = `<span id="w-badge">${badge(w.active, w.stage)}</span>`;
+        document.getElementById('w-symbol').textContent  = w.symbol || '—';
+        document.getElementById('w-stage').innerHTML     = `<span class="${stageColor[w.stage] || ''}">${w.stage}</span>`;
+        document.getElementById('w-contract').textContent = w.contract || '—';
+        document.getElementById('w-strike').textContent  = w.strike ? `$${w.strike} / ${w.expiry}` : '—';
+        document.getElementById('w-shares').textContent  = w.shares_owned ? `${w.shares_owned} shares` : '—';
+        document.getElementById('w-basis').textContent   = fmt(w.cost_basis);
+        document.getElementById('w-premium').textContent = fmt(w.total_premium);
+        document.getElementById('w-cycles').textContent  = w.cycles ?? '—';
+
+        document.getElementById('refresh-status').textContent = `updated ${new Date().toLocaleTimeString()}`;
+      } catch(e) {
+        document.getElementById('refresh-status').textContent = 'error fetching data';
+      }
+    }
+
+    function clock() {
+      document.getElementById('clock').textContent = new Date().toLocaleString();
+    }
+
+    clock(); refresh();
+    setInterval(clock, 1000);
+    setInterval(refresh, 30000);
+  </script>
+</body>
+</html>

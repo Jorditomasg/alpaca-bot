@@ -1,0 +1,17 @@
+# Credentials & state — NEVER commit these
+.env
+*.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Playwright (not used anymore but just in case)
+.playwright/
+
+# OS
+.DS_Store
+Thumbs.db
