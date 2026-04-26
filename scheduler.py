@@ -68,7 +68,7 @@ async def trailing_task():
         trailing_state.save(current)
 
     # run in executor to not block the event loop
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, trailing_stream.start, TSLA, on_price)
 
 
@@ -92,7 +92,7 @@ async def copy_task():
         print("[COPY] Fetching Capitol Trades...")
         try:
             # fetch_trades is sync (httpx.Client) — run in thread pool
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             trades = await loop.run_in_executor(None, scraper.fetch_trades, 3)
         except Exception as e:
             print(f"[COPY] Scraper error: {e}")
