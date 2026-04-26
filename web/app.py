@@ -22,9 +22,9 @@ async def dashboard(request: Request):
 
 @app.get("/api/status")
 async def status():
-    trailing = _read("trailing_state.json")
-    copy     = _read("copy_state.json")
-    wheel    = _read("wheel_state.json")
+    trailing = _read("data/trailing_state.json")
+    copy     = _read("data/copy_state.json")
+    wheel    = _read("data/wheel_state.json")
 
     return {
         "trailing": {

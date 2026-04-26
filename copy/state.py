@@ -2,7 +2,9 @@ import json
 from pathlib import Path
 from datetime import datetime
 
-STATE_FILE = Path("copy_state.json")
+_DATA = Path("data")
+_DATA.mkdir(exist_ok=True)
+STATE_FILE = _DATA / "copy_state.json"
 
 
 def load() -> dict:

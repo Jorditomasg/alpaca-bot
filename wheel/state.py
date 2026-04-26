@@ -1,7 +1,9 @@
 import json
 from pathlib import Path
 
-STATE_FILE = Path("wheel_state.json")
+_DATA = Path("data")
+_DATA.mkdir(exist_ok=True)
+STATE_FILE = _DATA / "wheel_state.json"
 
 
 def load() -> dict:
