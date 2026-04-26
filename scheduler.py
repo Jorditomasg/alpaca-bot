@@ -16,11 +16,11 @@ from shared import trader as shared_trader
 import trailing.state   as trailing_state
 import trailing.strategy as trailing_strategy
 import trailing.stream   as trailing_stream
-import copy.state   as copy_state_mod
-import copy.scraper as scraper
-import copy.scorer  as scorer
-import copy.copier  as copier
-import copy.portfolio as portfolio
+import copy_trader.state   as copy_state_mod
+import copy_trader.scraper as scraper
+import copy_trader.scorer  as scorer
+import copy_trader.copier  as copier
+import copy_trader.portfolio as portfolio
 import wheel.state   as wheel_state_mod
 import wheel.engine  as wheel_engine
 import wheel.monitor as wheel_monitor
