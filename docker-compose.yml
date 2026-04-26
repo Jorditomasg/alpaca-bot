@@ -1,5 +1,6 @@
 services:
   alpaca-bot:
+    container_name: alpaca-bot
     build: .
     restart: unless-stopped
     ports:
