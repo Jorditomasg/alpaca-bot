@@ -9,6 +9,7 @@ Trade fields (from Rust types):
   txId | pubDate | txDate | txType | politician.name
   asset.assetTicker | sizeRangeLow | sizeRangeHigh | value
 """
+import time
 import httpx
 
 _BASE = "https://bff.capitoltrades.com"
@@ -34,24 +35,39 @@ def fetch_trades(pages: int = 3) -> list[dict]:
     trades: list[dict] = []
     with httpx.Client(headers=_HEADERS, timeout=20, follow_redirects=True) as client:
         for page in range(pages):
-            try:
-                r = client.get(f"{_BASE}/trades", params={"page": page, "pageSize": 100})
-                r.raise_for_status()
-                data = r.json().get("data", [])
-                for item in data:
-                    t = _normalize(item)
-                    if t:
-                        trades.append(t)
-                print(f"[SCRAPER] Page {page}: {len(data)} trades")
-            except httpx.HTTPStatusError as e:
-                print(f"[SCRAPER] HTTP {e.response.status_code} — stopping")
+            data = _get_page(client, page)
+            if data is None:
                 break
-            except Exception as e:
-                print(f"[SCRAPER] Error page {page}: {e}")
-                break
+            for item in data:
+                t = _normalize(item)
+                if t:
+                    trades.append(t)
+            print(f"[SCRAPER] Page {page}: {len(data)} trades")
 
     print(f"[SCRAPER] Total: {len(trades)} trades fetched")
     return trades
+
+
+def _get_page(client: httpx.Client, page: int, retries: int = 3) -> list | None:
+    delay = 5
+    for attempt in range(retries):
+        try:
+            r = client.get(f"{_BASE}/trades", params={"page": page, "pageSize": 100})
+            r.raise_for_status()
+            return r.json().get("data", [])
+        except httpx.HTTPStatusError as e:
+            code = e.response.status_code
+            if code in (429, 503, 502) and attempt < retries - 1:
+                print(f"[SCRAPER] HTTP {code} — retry {attempt + 1}/{retries} in {delay}s")
+                time.sleep(delay)
+                delay *= 2
+            else:
+                print(f"[SCRAPER] HTTP {code} — giving up on page {page}")
+                return None
+        except Exception as e:
+            print(f"[SCRAPER] Error page {page}: {e}")
+            return None
+    return None
 
 
 def fetch_politicians() -> list[dict]:
