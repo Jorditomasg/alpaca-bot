@@ -54,32 +54,51 @@ def score_and_pick(trades: list[dict]) -> str | None:
 def _calculate_win_rate(buys: list[dict]) -> float:
     if not buys:
         return 0.5
+
     tickers = list({t["ticker"] for t in buys})
     try:
+        from alpaca.data.requests import StockLatestTradeRequest, StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame
         client = alpaca_client.stock_data()
-        from alpaca.data.requests import StockLatestTradeRequest
-        trades_resp = client.get_stock_latest_trade(
+
+        current_resp = client.get_stock_latest_trade(
             StockLatestTradeRequest(symbol_or_symbols=tickers)
         )
-        prices = {sym: float(tr.price) for sym, tr in trades_resp.items()}
+        current_prices = {sym: float(tr.price) for sym, tr in current_resp.items()}
     except Exception:
         return 0.5
 
     wins = 0
+    evaluated = 0
     for t in buys:
         ticker = t["ticker"]
-        if ticker not in prices:
+        traded_date = t.get("traded_date", "")
+        if ticker not in current_prices or not traded_date:
             continue
-        # we can't know exact buy price from scraper, so we assume any trade
-        # where the current price > price at filed date is a win.
-        # Approximation: we count the trade as a win if the stock hasn't
-        # crashed (price > 0), which is always true — so win_rate is
-        # computed as the fraction of tickers in positive territory vs
-        # simple momentum: above 200-day moving average.
-        # For simplicity, treat all positions as wins and rely on recency + volume.
-        wins += 1
 
-    return wins / len(buys)
+        try:
+            from alpaca.data.requests import StockBarsRequest
+            from alpaca.data.timeframe import TimeFrame
+            bars_resp = client.get_stock_bars(
+                StockBarsRequest(
+                    symbol_or_symbols=ticker,
+                    timeframe=TimeFrame.Day,
+                    start=traded_date,
+                    limit=1,
+                )
+            )
+            bars = bars_resp.get(ticker, [])
+            if not bars:
+                continue
+            entry_price = float(bars[0].close)
+        except Exception:
+            continue
+
+        evaluated += 1
+        if current_prices[ticker] > entry_price:
+            wins += 1
+
+    return (wins / evaluated) if evaluated > 0 else 0.5
 
 
 def _parse_date(s: str) -> datetime:

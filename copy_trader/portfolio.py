@@ -10,7 +10,7 @@ from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 def execute_batch(new_trades: list[dict], state: dict) -> None:
     """Process all new trades at once: update positions then rebalance once."""
     positions = state["positions"]
-    capital = _get_buying_power()
+    capital = _get_buying_power(state)
     state["total_capital"] = capital
     changed = False
 
@@ -22,6 +22,7 @@ def execute_batch(new_trades: list[dict], state: dict) -> None:
             positions[ticker] = {"notional": 0.0}
             changed = True
         elif txn == "sell" and ticker in positions:
+            close_position(ticker, state)
             del positions[ticker]
             changed = True
 
@@ -58,14 +59,13 @@ def _rebalance(positions: dict, capital: float) -> None:
                 side=side,
                 time_in_force=TimeInForce.DAY,
             ))
+            pos["notional"] = alloc
             print(f"[PORTFOLIO] {side.value.upper()} ${abs(delta):.2f} {sym}")
         except Exception as e:
             print(f"[PORTFOLIO] Order failed {sym}: {e}")
 
-        pos["notional"] = alloc
 
-
-def _get_buying_power() -> float:
+def _get_buying_power(state: dict) -> float:
     try:
         client = alpaca_client.trading()
         acct = client.get_account()
@@ -73,8 +73,9 @@ def _get_buying_power() -> float:
         print(f"[PORTFOLIO] Buying power: ${bp:,.2f}")
         return bp
     except Exception as e:
-        print(f"[PORTFOLIO] Could not fetch buying power: {e} — using last known capital")
-        return 0.0
+        fallback = state.get("total_capital", 0.0)
+        print(f"[PORTFOLIO] Could not fetch buying power: {e} — using last known ${fallback:,.2f}")
+        return fallback
 
 
 def _cancel_pending(client, symbol: str) -> None:
