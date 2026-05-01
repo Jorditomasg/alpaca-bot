@@ -27,7 +27,7 @@ import wheel.monitor as wheel_monitor
 import wheel.summary as wheel_summary
 
 TSLA = "TSLA"
-INITIAL_QTY = 20
+INITIAL_ALLOCATION = 0.30  # Spend 30% of buying power initially
 
 
 # ── Trailing Stop ──────────────────────────────────────────────────────────
@@ -35,41 +35,69 @@ INITIAL_QTY = 20
 async def trailing_task():
     s = trailing_state.load()
     if s is None:
-        print(f"[TRAILING] No state. Buying {INITIAL_QTY} {TSLA}")
-        shared_trader.buy(TSLA, INITIAL_QTY)
-        entry = shared_trader.get_latest_price(TSLA)
-        s = {
-            "symbol": TSLA, "entry_price": entry,
-            "position_qty": INITIAL_QTY,
-            "floor": round(entry * 0.90, 2),
-            "trailing_active": False, "high_watermark": entry,
-            "ladder_15_done": False, "ladder_22_done": False,
-            "ladder_30_done": False, "ladder_40_done": False,
-        }
-        trailing_state.save(s)
-        _print_trailing_summary(s)
+        print("[TRAILING] No state. Searching for consensus stock...")
+        try:
+            # Run scraper in thread pool to avoid blocking
+            loop = asyncio.get_running_loop()
+            trades = await loop.run_in_executor(None, scraper.fetch_trades)
+            ticker = scorer.get_consensus_ticker(trades) or "TSLA" # Fallback to TSLA
+        except Exception as e:
+            print(f"[TRAILING] Could not find consensus stock: {e}")
+            ticker = "TSLA"
+
+        bp = shared_trader.get_buying_power()
+        budget = round(bp * INITIAL_ALLOCATION, 2)
+        print(f"[TRAILING] Top Consensus Stock: {ticker}. Buying ${budget}")
+        
+        try:
+            shared_trader.buy(ticker, notional=budget)
+            entry = shared_trader.get_latest_price(ticker)
+            qty = round(budget / entry, 4)
+            
+            s = {
+                "symbol": ticker, "entry_price": entry,
+                "position_qty": qty,
+                "floor": round(entry * 0.90, 2),
+                "trailing_active": False, "high_watermark": entry,
+                "ladder_15_done": False, "ladder_22_done": False,
+                "ladder_30_done": False, "ladder_40_done": False,
+            }
+            trailing_state.save(s)
+            _print_trailing_summary(s)
+        except Exception as e:
+            print(f"[TRAILING] Initial buy failed for {ticker}: {e}")
+            return
     else:
-        print(f"[TRAILING] Resuming: entry=${s['entry_price']} floor=${s['floor']}")
+        ticker = s["symbol"]
+        print(f"[TRAILING] Resuming {ticker}: entry=${s['entry_price']} floor=${s['floor']}")
 
     async def on_price(price: float):
         current = trailing_state.load()
         if current is None:
             return
+        
+        symbol = current["symbol"]
         actions = trailing_strategy.evaluate(price, current)
         for action in actions:
-            print(f"[TRAILING] {action.type.upper()} qty={action.qty} | {action.reason}")
-            if action.type == "buy":
-                shared_trader.buy(TSLA, action.qty)
-                current["position_qty"] += action.qty
-            elif action.type == "sell":
-                shared_trader.sell(TSLA, action.qty)
-                trailing_state.clear()
-                return
+            print(f"[TRAILING] {action.type.upper()} | {action.reason}")
+            try:
+                if action.type == "buy":
+                    shared_trader.buy(symbol, notional=action.notional)
+                    added_qty = action.notional / price
+                    current["position_qty"] += round(added_qty, 4)
+                elif action.type == "sell":
+                    shared_trader.sell(symbol, qty=current["position_qty"])
+                    trailing_state.clear()
+                    # After selling, task will loop and find a NEW consensus stock next cycle
+                    return
+            except Exception as e:
+                print(f"[TRAILING] Action {action.type} failed: {e}")
+        
         trailing_state.save(current)
 
     # run in executor to not block the event loop
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, trailing_stream.start, TSLA, on_price)
+    await loop.run_in_executor(None, trailing_stream.start, ticker, on_price)
 
 
 # ── Copy Trader ────────────────────────────────────────────────────────────

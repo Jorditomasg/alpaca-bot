@@ -4,8 +4,9 @@ from dataclasses import dataclass
 @dataclass
 class Action:
     type: str   # "buy" | "sell"
-    qty: int
-    reason: str
+    qty: float = None
+    notional: float = None
+    reason: str = ""
 
 
 def evaluate(price: float, state: dict) -> list[Action]:
@@ -32,23 +33,23 @@ def evaluate(price: float, state: dict) -> list[Action]:
         ))
         return actions  # skip ladder checks, position is being closed
 
-    # Ladder buys — pyramid: more shares at deeper discounts
-    # -15%: cautious re-entry after stop loss
-    # -22%: increasing conviction
-    # -30%: significant dip, more aggressive
-    # -40%: crash territory, maximum conviction
+    # Ladder buys — pyramid: more capital at deeper discounts
+    # -15%: $10 entry
+    # -22%: $20 conviction
+    # -30%: $30 dip
+    # -40%: $50 aggressive
     LADDERS = [
-        ("ladder_15_done", 0.85, 10, "Ladder -15%"),
-        ("ladder_22_done", 0.78, 20, "Ladder -22%"),
-        ("ladder_30_done", 0.70, 30, "Ladder -30%"),
-        ("ladder_40_done", 0.60, 50, "Ladder -40%"),
+        ("ladder_15_done", 0.85, 10.0, "Ladder -15%"),
+        ("ladder_22_done", 0.78, 20.0, "Ladder -22%"),
+        ("ladder_30_done", 0.70, 30.0, "Ladder -30%"),
+        ("ladder_40_done", 0.60, 50.0, "Ladder -40%"),
     ]
 
-    for key, threshold, qty, label in LADDERS:
+    for key, threshold, amount, label in LADDERS:
         if not state[key] and price <= state["entry_price"] * threshold:
             actions.append(Action(
                 type="buy",
-                qty=qty,
+                notional=amount,
                 reason=f"{label} — price=${price:.2f}",
             ))
             state[key] = True

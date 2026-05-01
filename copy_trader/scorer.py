@@ -13,18 +13,18 @@ from datetime import datetime, timedelta
 from shared import alpaca_client
 
 
-def score_and_pick(trades: list[dict]) -> str | None:
+def score_all_politicians(trades: list[dict]) -> dict[str, float]:
+    """Calculates scores for all politicians and returns a mapping."""
     if not trades:
-        return None
+        return {}
 
     by_politician: dict[str, list[dict]] = defaultdict(list)
     for t in trades:
         by_politician[t["politician"]].append(t)
 
-    # filter: minimum 5 trades to be eligible
-    eligible = {k: v for k, v in by_politician.items() if len(v) >= 5}
-    if not eligible:
-        eligible = by_politician  # relax if not enough data
+    # filter: minimum 3 trades to have a baseline
+    eligible = {k: v for k, v in by_politician.items() if len(v) >= 3}
+    if not eligible: eligible = by_politician
 
     cutoff_30d = datetime.utcnow() - timedelta(days=30)
     max_recent = max(
@@ -37,17 +37,60 @@ def score_and_pick(trades: list[dict]) -> str | None:
     for politician, ts in eligible.items():
         buys = [t for t in ts if t["type"] == "buy"]
         win_rate = _calculate_win_rate(buys) if buys else 0.5
+        recent_count = sum(1 for t in ts if _parse_date(t["traded_date"]) >= cutoff_30d)
+        
+        recency = recent_count / max_recent
+        volume = len(ts) / max_volume
+        
+        # Final Score: Win Rate is king (50%), then Activity (30%) and Volume (20%)
+        scores[politician] = win_rate * 0.50 + recency * 0.30 + volume * 0.20
 
-        recent_count = sum(
-            1 for t in ts if _parse_date(t["traded_date"]) >= cutoff_30d
-        )
-        recency  = recent_count / max_recent
-        volume   = len(ts) / max_volume
+    return scores
 
-        scores[politician] = win_rate * 0.40 + recency * 0.35 + volume * 0.25
 
+def get_consensus_ticker(trades: list[dict]) -> str | None:
+    """Finds the stock with the most 'weighted consensus' among politicians."""
+    if not trades:
+        return None
+
+    # 1. Get quality scores for all politicians
+    p_scores = score_all_politicians(trades)
+    
+    # 2. Count weighted buys per ticker
+    ticker_scores: dict[str, float] = defaultdict(float)
+    ticker_buyers: dict[str, set] = defaultdict(set)
+    
+    for t in trades:
+        if t["type"] != "buy":
+            continue
+            
+        ticker = t["ticker"]
+        pol = t["politician"]
+        score = p_scores.get(pol, 0.1) # Default low score for unknown
+        
+        # Scoring formula: 
+        # Each unique politician buying the stock adds their quality score to the total
+        if pol not in ticker_buyers[ticker]:
+            ticker_scores[ticker] += score
+            ticker_buyers[ticker].add(pol)
+
+    if not ticker_scores:
+        return None
+
+    # 3. Pick the winner
+    best_ticker = max(ticker_scores, key=ticker_scores.__getitem__)
+    print(f"[CONSENSUS] Winner: {best_ticker} | Buyers: {len(ticker_buyers[best_ticker])} | Weight: {ticker_scores[best_ticker]:.2f}")
+    
+    return best_ticker
+
+
+def score_and_pick(trades: list[dict]) -> str | None:
+    """Legacy support: just picks the top politician."""
+    scores = score_all_politicians(trades)
+    if not scores:
+        return None
     top = max(scores, key=scores.__getitem__)
-    print(f"[SCORER] Top: {top} | score={scores[top]:.3f}")
+    print(f"[SCORER] Top Politician: {top} | score={scores[top]:.3f}")
     return top
 
 
