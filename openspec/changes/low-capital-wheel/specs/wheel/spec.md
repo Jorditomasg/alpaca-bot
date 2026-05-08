@@ -84,7 +84,8 @@ spread_width`, submit a single multi-leg credit-spread order via Alpaca
 The engine SHALL refuse to open a new cycle when available buying power is
 below `spread_width × 100 × 2`. It SHALL log exactly ONE warning message upon
 entering the under-capitalised condition and SHALL NOT log additional warnings
-on subsequent cycles while the condition persists.
+on subsequent cycles while the condition persists. The guard SHALL apply only
+when state is `IDLE`; it SHALL NOT block closing transitions on an open spread.
 
 #### Scenario: Buying power below threshold — first detection
 
@@ -109,6 +110,14 @@ on subsequent cycles while the condition persists.
 - WHEN buying power rises to ≥ `spread_width × 100 × 2`
 - THEN the capital guard is cleared
 - AND the engine attempts to open a spread on the next eligible cycle
+
+#### Scenario: Capital guard does not block closing an open spread
+
+- GIVEN state is `SPREAD_OPEN` and buying power has dropped below the open threshold
+- WHEN the engine evaluates the cycle
+- THEN the capital guard SHALL NOT halt the cycle
+- AND profit-take, expiry, and max-loss handling SHALL proceed normally
+- AND the guard re-engages only when state returns to `IDLE`
 
 ---
 
@@ -156,35 +165,46 @@ on short leg, sell-to-close on long leg) and transition to `IDLE`.
 
 ---
 
-### Requirement: Spread Expiry Handling (Worthless)
+### Requirement: Spread Expiry P&L Accounting
 
-If both legs of the spread expire worthless (market price ≈ $0.00 at expiry),
-the engine SHALL transition to `IDLE`, increment `cycles`, and record the full
-net credit as realized profit.
+At expiry, the engine SHALL compute realized P&L based on the underlying's
+closing price relative to both strikes:
 
-#### Scenario: Both legs expire worthless
+- IF `spot ≥ short_strike` THEN both legs expire worthless and realized
+  profit = `net_credit`
+- IF `long_strike ≤ spot < short_strike` THEN the short leg is in the money
+  and realized loss = `(short_strike - spot) × 100 - net_credit` (clamped
+  to `[0, max_loss]`)
+- IF `spot < long_strike` THEN realized loss = `(spread_width × 100) - net_credit`
+  (the full max loss)
 
-- GIVEN state is `SPREAD_OPEN` and the expiry date has passed
-- WHEN both leg prices are ≈ $0.00
-- THEN `cycles` increments by 1
-- AND realized profit equals the original net credit
-- AND state transitions to `IDLE`
+In all three cases the engine SHALL transition to `IDLE`, increment `cycles`,
+and clear all spread-specific state fields.
 
----
+#### Scenario: Spot above short strike — full credit booked
 
-### Requirement: Spread Max-Loss Handling
+- GIVEN state is `SPREAD_OPEN`, short_strike=$9, long_strike=$7, net_credit=$0.40
+- WHEN expiry passes with spot=$9.50
+- THEN realized profit = $40 (full net_credit)
+- AND cycles increments by 1
+- AND state transitions to IDLE
 
-If the underlying closes below the long-strike at expiry, the engine SHALL
-record realized loss as `(spread_width × 100) - net_credit`, increment
-`cycles`, and transition to `IDLE`.
+#### Scenario: Spot between strikes — partial loss
 
-#### Scenario: Underlying below long strike at expiry
+- GIVEN state is `SPREAD_OPEN`, short_strike=$9, long_strike=$7, net_credit=$0.40, width=$2
+- WHEN expiry passes with spot=$8.20
+- THEN realized loss = `(9 - 8.20) × 100 - 40 = $40` (clamped to [0, $160])
+- AND cycles increments by 1
+- AND state transitions to IDLE
+- AND realized P&L is NOT credited as full premium
 
-- GIVEN state is `SPREAD_OPEN`, `spread_width` is $2, and `net_credit` is $0.40
-- WHEN the underlying closes below the long strike at expiry
-- THEN realized loss recorded is $160 (`(2 × 100) - 40`)
-- AND `cycles` increments by 1
-- AND state transitions to `IDLE`
+#### Scenario: Spot below long strike — full max loss
+
+- GIVEN state is `SPREAD_OPEN`, short_strike=$9, long_strike=$7, net_credit=$0.40, width=$2
+- WHEN expiry passes with spot=$6.50
+- THEN realized loss = $160 (`(2 × 100) - 40`)
+- AND cycles increments by 1
+- AND state transitions to IDLE
 
 ---
 
@@ -209,6 +229,104 @@ unmodified.
 - WHEN the short put is assigned
 - THEN state transitions to `ASSIGNED`
 - AND `CALL_OPEN` follows per existing CSP logic
+
+---
+
+### Requirement: Profit Target Configuration Consistency
+
+Every code path that decides whether to close a spread early on profit SHALL
+read the threshold from `WheelConfig.profit_target_pct`. Hardcoded percentage
+values SHALL NOT exist anywhere in `wheel/`.
+
+#### Scenario: Custom profit target propagates to monitor
+
+- GIVEN `WHEEL_PROFIT_TARGET_PCT=25` is set in the environment
+- WHEN the monitor evaluates an open spread
+- THEN the monitor closes the spread when current mid-price ≤ 75% of net_credit
+  (consistent with engine path)
+
+---
+
+### Requirement: Strike Width Cap on Fallback
+
+When the exact configured `spread_width` is unavailable in the option chain,
+the engine SHALL select the widest pair NOT EXCEEDING `spread_width`. It
+SHALL NOT silently produce a wider spread than configured (which would
+exceed `min_buying_power` assumptions and inflate max loss).
+
+#### Scenario: No exact-width long leg available
+
+- GIVEN configured spread_width=$2 and short_strike=$9, and the option chain
+  offers long-strike candidates at $6.50 (width=$2.50) and $7.50 (width=$1.50)
+- WHEN the engine selects a spread
+- THEN the long leg is $7.50 (width=$1.50, within configured cap)
+- AND $6.50 is rejected (width=$2.50 exceeds configured spread_width)
+- AND the engine NEVER opens a spread wider than the configured `spread_width`
+
+#### Scenario: No in-bound long leg exists
+
+- GIVEN configured spread_width=$2 and short_strike=$9, and all available
+  long-strike candidates would produce width > $2
+- WHEN the engine evaluates the chain
+- THEN no spread is selected
+- AND state remains `IDLE`
+
+---
+
+### Requirement: Atomic State Persistence
+
+The wheel state file SHALL be written atomically. A crash mid-write SHALL
+NOT leave a corrupted or truncated JSON file on disk.
+
+#### Scenario: Save survives an interrupted write
+
+- GIVEN a valid state has been previously saved
+- WHEN a new save is issued and the process is killed mid-write
+- THEN the file on disk is either the old valid state or the new valid state
+- AND it is never empty or syntactically invalid JSON
+
+---
+
+### Requirement: Reject Spreads Built on One-Sided Quotes
+
+When computing a leg's mid-price, if either bid OR ask is missing or zero,
+the leg SHALL be treated as unquotable and any spread that would use it
+SHALL be rejected (not built, not opened, not used for close-decision).
+
+#### Scenario: Long leg has bid=0
+
+- GIVEN a candidate long-leg contract has bid=$0.00 ask=$0.50
+- WHEN the engine evaluates the spread
+- THEN the spread is rejected with a log line citing the unquotable leg
+- AND no order is submitted
+
+---
+
+### Requirement: Symbol Migration Honors Configuration
+
+When loading legacy state files, if `WHEEL_SYMBOL` env var is explicitly
+set AND state is `IDLE` (no in-flight position), the migration SHALL
+overwrite the legacy `symbol` field with the configured value.
+
+If state is in a non-IDLE stage (`PUT_OPEN`, `ASSIGNED`, `CALL_OPEN`,
+`SPREAD_OPEN`) the legacy symbol SHALL be preserved to avoid orphaning
+the in-flight position.
+
+#### Scenario: Legacy IDLE state with new symbol config
+
+- GIVEN existing `data/wheel_state.json` has `symbol="TSLA"` and `stage="IDLE"`
+- AND environment has `WHEEL_SYMBOL=SOFI`
+- WHEN state is loaded
+- THEN the in-memory state has `symbol="SOFI"`
+- AND the next save persists `symbol="SOFI"`
+
+#### Scenario: Legacy non-IDLE state preserves symbol
+
+- GIVEN existing `data/wheel_state.json` has `symbol="TSLA"` and `stage="PUT_OPEN"`
+- AND environment has `WHEEL_SYMBOL=SOFI`
+- WHEN state is loaded
+- THEN the in-memory state retains `symbol="TSLA"`
+- AND a warning is logged advising the operator to wait until IDLE before flipping
 
 ---
 

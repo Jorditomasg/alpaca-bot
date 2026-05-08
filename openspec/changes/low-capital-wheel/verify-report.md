@@ -1,69 +1,58 @@
-# Verify Report: low-capital-wheel
+# Verify Report: low-capital-wheel (post-review pass)
 
 ## Summary
 
-- **Test results**: 67 passed, 1 skipped, 1 deselected, 0 failed (Python 3.14.4, pytest 9.0.3)
-- **Spec coverage**: 10/10 requirements have at least one direct test
-- **Tasks coverage**: 37/39 checked, 2 operator-deferred (7.2 real chain capture, 10.3 paper smoke run) — both documented
-- **Import sanity**: `wheel.engine`, `wheel.spreads`, `wheel.config`, `wheel.state`, `wheel.monitor`, `wheel.summary` all import cleanly. `scheduler.py` import requires runtime deps (`httpx` for copy_trader) — not exercised in this verify environment but unchanged from main.
-- **Code-level checks**:
-  - Capital guard bucketed-log latch present at `wheel/engine.py:214-241`
-  - MLEG order shape correct at `wheel/spreads.py:169-216` (OrderClass.MLEG, OptionLegRequest, PositionIntent.SELL_TO_OPEN/BUY_TO_OPEN for opening, BUY_TO_CLOSE/SELL_TO_CLOSE for closing)
-  - State migration default at `wheel/state.py:47-51` (legacy file → `strategy_type="csp"`)
-  - No TSLA hardcode in `wheel/` (only in test fixtures asserting migration path)
+- **Test results**: 87 passed, 1 skipped, 1 deselected, 0 failed (Python 3.14.4, pytest 9.0.3) — up from 67 in the first pass (+20 tests covering the review-driven fixes)
+- **Spec coverage**: 16/16 requirements have at least one direct test (was 10/10; spec was extended with 6 new requirements + 1 refinement during the review pass)
+- **Tasks coverage**: section 11 added for the review fixes; all section-11 tasks checked. Operator-deferred items (real chain capture, paper smoke run) unchanged.
+- **Review findings status**: all 9 (2 CRITICAL + 4 WARNING + 3 NIT) addressed and tested.
 
-## CRITICAL
+## CRITICAL fixes — verified
 
-_None._
+| Finding | File:Line | Verification |
+|---------|-----------|--------------|
+| Expiry P&L mis-accounted in partial-loss zone | `wheel/engine.py:157-188` | Three-region handling: `price >= short_strike` (worthless), `price >= long_strike` (partial, intrinsic-based clamp), else (full max loss). `total_premium` reverses the open-time credit on losing closes; `realized_pnl` accumulator added. Tests assert distinct numeric outcomes per region. |
+| Capital guard blocks spread close | `wheel/engine.py:70-78` | Guard moved inside the `IDLE` branch with explanatory comment at line 76: "closing a spread releases collateral and must never be blocked." Test confirms SPREAD_OPEN cycle proceeds with BP=$50. |
 
-## WARNING
+## WARNING fixes — verified
 
-1. **Replay P&L walk test skipped**: `tests/replay/test_pnl_walk.py` requires at least 2 real `sofi_<YYYYMMDD>.json` fixtures captured on different trading days. Currently only one synthetic fixture exists. The operator must run `python -m wheel.tools.capture_chain SOFI` on two distinct trading days before this test contributes coverage. Documented in `docs/known-limitations.md` and tasks 7.2.
+| Finding | File | Verification |
+|---------|------|--------------|
+| Monitor hardcodes 50% | `wheel/monitor.py` | Reads `cfg.profit_target_pct`. Test with `WHEEL_PROFIT_TARGET_PCT=25` confirms 75%-of-credit threshold. |
+| Symbol migration no-op | `wheel/state.py` | IDLE state with explicit `WHEEL_SYMBOL` overwrites legacy symbol; non-IDLE preserves and warns. Three tests cover the matrix. |
+| Non-atomic state save | `wheel/state.py:120-136` | `tempfile.mkstemp` in same dir + `os.replace` (atomic on POSIX and Windows when same filesystem). |
+| `_mid` accepts half-quoted | `wheel/spreads.py` | Changed `bid <= 0 AND ask <= 0` → `bid <= 0 OR ask <= 0`. Test confirms rejection. |
 
-2. **Score threshold 0.30 unvalidated against real chains**: The synthetic fixture uses inflated premiums to satisfy `credit / max_loss ≥ 0.30`. Real SOFI chains on low-IV days may return `None` from `best_bull_put_spread` more often than expected. The threshold is a hardcoded constant in `wheel/spreads.py` — tuning may be required after first live observation.
+## NIT fixes — verified
 
-3. **Python version drift**: Verify ran on Python 3.14.4 (linuxbrew), but the design intent is Python 3.12 (Docker base). Code is forward-compatible (no 3.14-only syntax), but production parity should be validated when deploying via Dockerfile. No action required for this change, just a note.
+- `_reset_spread_fields` clears `contract_expiry` (no stale leak into IDLE)
+- Width cap on fallback: never produces a wider spread than configured
+- `_open_spread` defers state mutation until after `submit_order` succeeds
 
-4. **Integration tests never executed in this verify**: `tests/integration/test_alpaca_mleg.py` is correctly marked `@pytest.mark.integration` and deselected by default. Operator must run `pytest -m integration` against a real Alpaca paper account to confirm the constructed MLEG order is accepted by the API. Skipping this leaves a small risk that an SDK-level field shape mismatch goes undetected until the first live cycle.
+## Spec → Test Map (additions over first pass)
 
-## SUGGESTION
+| New requirement | Tests |
+|-----------------|-------|
+| Three-region expiry P&L | `test_spread_expires_worthless_above_short`, `test_spread_partial_loss_between_strikes`, `test_spread_full_max_loss_below_long`, `test_total_premium_reversed_on_losing_close` |
+| Capital guard scope (IDLE only) | `test_capital_guard_does_not_block_spread_close`, `test_capital_guard_still_blocks_idle_open` |
+| Profit target consistency | `test_monitor_reads_profit_target_from_config`, `test_default_profit_target_unchanged` |
+| Strike width cap | `test_fallback_never_exceeds_configured_width`, `test_fallback_picks_widest_qualifying` |
+| Atomic state save | `test_save_does_not_leave_tmp_files`, `test_save_round_trip_after_atomic_write` |
+| One-sided quote rejection | `test_mid_rejects_zero_bid`, `test_mid_rejects_zero_ask`, `test_spread_rejected_when_short_unquotable` |
+| Symbol migration override | `test_legacy_idle_with_env_overwrites_symbol`, `test_legacy_non_idle_preserves_symbol`, `test_no_env_var_preserves_symbol` |
 
-1. **Add CI workflow**: `.github/workflows/test.yml` running `pytest` on push would gate regressions. Out of scope here but a low-cost next step.
-2. **Earnings-calendar guard (v2)**: SOFI earnings during contract life can blow the spread to max loss. A small calendar check in `_run_spread_cycle` to skip openings within N days of earnings would meaningfully reduce tail risk. Documented in `docs/known-limitations.md`.
-3. **Auto-symbol screening (v2)**: Currently the symbol is explicit config. A future enhancement could auto-pick a liquid sub-$15 underlying with healthy IV — leveraging the existing scorer pattern from `copy_trader/`.
+## Remaining open items (operator-deferred, unchanged)
 
-## Spec → Test Map
-
-| Requirement | Tests |
-|-------------|-------|
-| Strategy Type Configuration — default `bull_put_spread` | `test_default_strategy_type` |
-| Strategy Type Configuration — explicit CSP override | `test_env_override_strategy_type`, `test_dispatch_calls_csp_cycle` |
-| Configurable Underlying Symbol — loaded from config | `test_env_override_symbol` |
-| Configurable Underlying Symbol — default SOFI | `test_default_symbol` |
-| Configurable Underlying Symbol — no TSLA hardcode | `test_no_tsla_hardcode_in_fresh_state` |
-| Bull Put Spread Opening — happy path | `test_idle_to_spread_open_happy_path`, `test_happy_path_selects_correct_strikes`, `test_build_open_order_shape` |
-| Bull Put Spread Opening — no valid strike | `test_idle_stays_when_no_spread_found`, `test_empty_chain_returns_none`, `test_no_contracts_in_dte_range_returns_none`, `test_score_threshold_rejection` |
-| Capital Guard — first detection logs | `test_capital_guard_logs_on_first_insufficient` |
-| Capital Guard — silent on subsequent same-bp cycles | `test_capital_guard_silent_on_second_cycle_same_bp` |
-| Capital Guard — relog on bp change | `test_capital_guard_relogs_when_bp_changes` |
-| Capital Guard — clears on recovery | `test_capital_guard_clears_on_recovery` |
-| Spread State Persistence — all fields after open | `test_idle_to_spread_open_happy_path`, `test_save_and_load_round_trip` |
-| Spread State Persistence — null in IDLE | `test_fresh_state_spread_fields_are_null` |
-| Spread Close at 50% — profit reached | `test_spread_open_to_idle_profit_take`, `test_spread_mid_price_below_target_triggers_close`, `test_spread_mid_exactly_at_boundary_triggers_close` |
-| Spread Close at 50% — above threshold no-op | `test_spread_open_stays_when_mid_above_target`, `test_spread_mid_price_above_target_no_close` |
-| Spread Expiry Worthless | `test_spread_expires_worthless` |
-| Spread Max-Loss Handling | `test_spread_max_loss_at_expiry` |
-| State Machine Paths — spread mode never enters ASSIGNED | `test_dispatch_calls_spread_cycle`, `test_csp_does_not_reach_spread_open` |
-| State Machine Paths — CSP mode unchanged | `test_csp_idle_tries_to_open_put`, `test_csp_early_close_still_works` |
-| Test Infrastructure — pytest green | Verified by full suite run (67 passed) |
-| Test Infrastructure — all transitions covered | Verified by transition test set (open, profit-take, expiry, max-loss, capital guard) |
-| Test Infrastructure — replay test exists | `test_spread_selection_from_synthetic_fixture`, `test_spread_fixture_net_credit_is_plausible` |
-| Test Infrastructure — integration gated | `tests/integration/test_alpaca_mleg.py` deselected by default (1 deselected in run output) |
+1. **Real chain capture** (task 7.2): `python -m wheel.tools.capture_chain SOFI` in market hours. Replay P&L walk test will activate once 2 fixtures from different days exist.
+2. **Paper smoke run** (task 10.3): `WHEEL_STRATEGY_TYPE=bull_put_spread WHEEL_SYMBOL=SOFI python main.py` — validates Alpaca accepts the constructed MLEG order shape end-to-end.
+3. **Integration test execution** (task 8.x): `pytest -m integration` against paper account. Code constructs the MLEG order; only paper-side acceptance remains unverified.
+4. **Score threshold tuning** (`docs/known-limitations.md`): 0.30 may be too tight on low-IV days. Observe live, then tune.
+5. **Earnings guard** (`docs/known-limitations.md`): SOFI earnings during contract life can blow spreads. v2 ticket.
 
 ## Conclusion
 
-**PASS WITH WARNINGS**
+**PASS**
 
-The change is implementation-complete and spec-compliant. All money-flow paths have direct test coverage. The 4 warnings are operator-action items (capture real fixtures, run paper smoke, validate threshold under real conditions) rather than code defects, and they are tracked in `tasks.md` and `docs/known-limitations.md`.
+All review findings addressed with test coverage. The two real-money correctness bugs (partial-loss mis-accounting, stuck-position-when-BP-low) are fixed and regression-tested. The change is safe to archive once the operator runs the paper smoke (task 10.3) to validate Alpaca's API accepts the MLEG order shape we construct.
 
-Recommend: proceed to `sdd-archive` after the operator has done at least one paper smoke run to validate that Alpaca actually accepts the MLEG order shape we constructed (warning #4). Archive without that run is acceptable but carries the small residual risk noted above.
+Recommended next step: operator runs the paper smoke, then `/sdd-archive low-capital-wheel`.
