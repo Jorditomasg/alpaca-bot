@@ -26,7 +26,8 @@ import wheel.engine  as wheel_engine
 import wheel.monitor as wheel_monitor
 import wheel.summary as wheel_summary
 
-TSLA = "TSLA"
+# TSLA constant removed — wheel symbol now comes from WheelConfig (WHEEL_SYMBOL env var)
+# Trailing fallback still references TSLA inline (trailing strategy is out of scope)
 INITIAL_ALLOCATION = 0.30  # Spend 30% of buying power initially
 
 

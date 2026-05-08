@@ -1,0 +1,78 @@
+schema: spec-driven
+
+context: |
+  Tech stack: Python 3.12, asyncio, FastAPI, uvicorn, alpaca-py>=0.13, httpx, jinja2, pytz, python-dotenv.
+  Architecture: three independent strategy modules (trailing/, copy_trader/, wheel/) orchestrated by scheduler.py and main.py; shared/ holds the Alpaca client wrappers, market hours, and order execution; web/ is a FastAPI dashboard reading state JSON files. Each strategy persists state under data/ as JSON.
+  Testing: NO test runner configured (no pytest, no tests/, no pyproject.toml). Quality gates rely on manual paper-trading runs in Docker.
+  Style: snake_case modules, simple function-level APIs, side-effect prints with [TAG] prefix, dict-based state, dataclasses where helpful.
+  Runtime: Docker (python:3.12-slim) via docker-compose; deploys to a home server via SSH GitHub Action on push to main.
+
+strict_tdd: false
+
+testing:
+  strict_tdd: false
+  detected: 2026-05-08
+  runner:
+    framework: none
+    command: ""
+  layers:
+    unit:
+      available: false
+      tool: ""
+    integration:
+      available: false
+      tool: ""
+    e2e:
+      available: false
+      tool: ""
+  coverage:
+    available: false
+    command: ""
+  quality:
+    linter:
+      available: false
+      command: ""
+    type_checker:
+      available: false
+      command: ""
+    formatter:
+      available: false
+      command: ""
+  notes: |
+    No test runner is installed. Before sdd-apply runs on changes that require tests, the team
+    MUST add pytest (recommended) and create a tests/ directory. Suggested baseline:
+      pip install pytest pytest-asyncio pytest-mock
+    plus a pyproject.toml with [tool.pytest.ini_options] testpaths = ["tests"].
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+    - Identify which strategy module(s) and shared helpers are affected
+    - Note paper vs live trading impact (this repo runs against paper trading only)
+  specs:
+    - Use Given/When/Then format for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+    - Reference state file shape (data/*.json) when behavior depends on it
+  design:
+    - Include sequence diagrams for any cross-module flow involving Alpaca API calls
+    - Document architecture decisions with rationale
+    - Call out blocking-IO boundaries — sync alpaca-py calls MUST run in run_in_executor when invoked from async tasks
+  tasks:
+    - Group tasks by phase (infrastructure, implementation, testing)
+    - Use hierarchical numbering (1.1, 1.2, etc.)
+    - Keep tasks small enough to complete in one session
+    - If the change requires automated tests, include a task to bootstrap pytest before any test-writing task
+  apply:
+    - Follow existing code patterns (snake_case, dict state, [TAG] prints)
+    - Persist state via the existing per-strategy state.py modules — do NOT introduce a new state store without a design entry
+    - Never commit secrets; .env stays local
+    - tdd: false
+    - test_command: ""
+  verify:
+    test_command: ""
+    build_command: ""
+    coverage_threshold: 0
+    - Compare implementation against every spec scenario
+    - Run tests if test infrastructure has been added by the change
+  archive:
+    - Warn before merging destructive deltas (large removals)

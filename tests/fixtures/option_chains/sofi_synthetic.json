@@ -1,0 +1,120 @@
+{
+  "captured_at": "2026-05-08T18:30:00Z",
+  "underlying": "SOFI",
+  "spot_price": 10.05,
+  "_note": "SYNTHETIC FIXTURE — placeholder for replay tests. Task 7.2 (real capture) is operator-deferred to first market-open run. Replace with sofi_<YYYYMMDD>.json from wheel/tools/capture_chain.py.",
+  "contracts": [
+    {
+      "symbol": "SOFI20260522P00013000",
+      "type": "put",
+      "strike": 13.0,
+      "expiration_date": "2026-05-22",
+      "bid": 3.10,
+      "ask": 3.30
+    },
+    {
+      "symbol": "SOFI20260522P00012000",
+      "type": "put",
+      "strike": 12.0,
+      "expiration_date": "2026-05-22",
+      "bid": 2.10,
+      "ask": 2.25
+    },
+    {
+      "symbol": "SOFI20260522P00011000",
+      "type": "put",
+      "strike": 11.0,
+      "expiration_date": "2026-05-22",
+      "bid": 1.20,
+      "ask": 1.35
+    },
+    {
+      "symbol": "SOFI20260522P00010000",
+      "type": "put",
+      "strike": 10.0,
+      "expiration_date": "2026-05-22",
+      "bid": 0.45,
+      "ask": 0.52
+    },
+    {
+      "symbol": "SOFI20260522P00009000",
+      "type": "put",
+      "strike": 9.0,
+      "expiration_date": "2026-05-22",
+      "bid": 0.58,
+      "ask": 0.66
+    },
+    {
+      "symbol": "SOFI20260522P00008000",
+      "type": "put",
+      "strike": 8.0,
+      "expiration_date": "2026-05-22",
+      "bid": 0.07,
+      "ask": 0.10
+    },
+    {
+      "symbol": "SOFI20260522P00007000",
+      "type": "put",
+      "strike": 7.0,
+      "expiration_date": "2026-05-22",
+      "bid": 0.10,
+      "ask": 0.14
+    },
+    {
+      "symbol": "SOFI20260605P00013000",
+      "type": "put",
+      "strike": 13.0,
+      "expiration_date": "2026-06-05",
+      "bid": 3.20,
+      "ask": 3.40
+    },
+    {
+      "symbol": "SOFI20260605P00012000",
+      "type": "put",
+      "strike": 12.0,
+      "expiration_date": "2026-06-05",
+      "bid": 2.20,
+      "ask": 2.38
+    },
+    {
+      "symbol": "SOFI20260605P00011000",
+      "type": "put",
+      "strike": 11.0,
+      "expiration_date": "2026-06-05",
+      "bid": 1.30,
+      "ask": 1.48
+    },
+    {
+      "symbol": "SOFI20260605P00010000",
+      "type": "put",
+      "strike": 10.0,
+      "expiration_date": "2026-06-05",
+      "bid": 0.58,
+      "ask": 0.66
+    },
+    {
+      "symbol": "SOFI20260605P00009000",
+      "type": "put",
+      "strike": 9.0,
+      "expiration_date": "2026-06-05",
+      "bid": 0.62,
+      "ask": 0.68
+    },
+    {
+      "symbol": "SOFI20260605P00008000",
+      "type": "put",
+      "strike": 8.0,
+      "expiration_date": "2026-06-05",
+      "bid": 0.11,
+      "ask": 0.15
+    },
+    {
+      "symbol": "SOFI20260605P00007000",
+      "type": "put",
+      "strike": 7.0,
+      "expiration_date": "2026-06-05",
+      "bid": 0.10,
+      "ask": 0.14
+    }
+  ]
+}

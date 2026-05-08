@@ -17,13 +17,24 @@ Follows the top-performing US politician based on STOCK Act disclosures (Capitol
 - Allocates $100 total across all active copied positions
 - Options trades are translated to their underlying stock
 
-### Wheel Strategy (TSLA)
-Income generation via options during market hours:
+### Wheel Strategy
+Income generation via options during market hours. Two modes available:
+
+**Bull Put Spread mode (default):**
+- Sells a credit spread: short put ~10% OTM + long put 2 strikes below
+- Defined risk: max loss capped at spread width × 100
+- Capital requirement: $400 minimum (2× spread width × 100)
+- Early close at 50% profit; full credit kept if expires worthless
+- No stock assignment possible — `IDLE → SPREAD_OPEN → IDLE` only
+
+**CSP mode (legacy):**
 - **Stage 1 — Sell Put:** ~10% OTM, 2–4 weeks out. Collect premium. Repeat if expires worthless.
 - **Stage 2 — Sell Call:** Once assigned, sell covered call ~10% above cost basis. Repeat if expires worthless.
-- Early close at 50% profit — buy to close and sell a new contract immediately
-- Never sells a put without sufficient buying power
-- Never sells a call below cost basis
+- Enable with `WHEEL_STRATEGY_TYPE=csp`
+
+Both modes:
+- Capital guard: skips cycle if buying power is below threshold (logs once, then silent)
+- Early close at 50% profit
 - Daily summary at market close
 
 ## Architecture
@@ -71,6 +82,36 @@ open http://localhost:7080
 | `ALPACA_API_KEY` | Alpaca API key |
 | `ALPACA_SECRET_KEY` | Alpaca secret key |
 | `ALPACA_BASE_URL` | `https://paper-api.alpaca.markets/v2` for paper trading |
+
+### Wheel Strategy Variables
+
+| Variable | Type | Default | Description |
+|---|---|---|---|
+| `WHEEL_STRATEGY_TYPE` | string | `bull_put_spread` | `bull_put_spread` or `csp` |
+| `WHEEL_SYMBOL` | string | `SOFI` | Underlying ticker for the wheel |
+| `WHEEL_SPREAD_WIDTH` | float | `2` | Dollar width between short and long strike |
+| `WHEEL_MIN_BUYING_POWER` | float | `width × 100 × 2` | Capital guard floor (default $400) |
+| `WHEEL_TARGET_DTE_MIN` | int | `14` | Minimum days-to-expiry for contract selection |
+| `WHEEL_TARGET_DTE_MAX` | int | `28` | Maximum days-to-expiry for contract selection |
+| `WHEEL_PROFIT_TARGET_PCT` | float | `50` | Close position at this % of credit received |
+| `WHEEL_TARGET_OTM_PCT` | float | `0.10` | Short strike distance from spot (10% = 1 strike OTM) |
+| `WHEEL_SCORE_THRESHOLD` | float | `0.30` | Min credit/max-loss ratio to accept a spread |
+
+## Running Tests
+
+```bash
+# Install dev dependencies
+pip install -e ".[dev]"
+
+# Run all unit + replay tests (integration skipped by default)
+pytest tests/
+
+# Run integration tests (requires paper API keys)
+pytest -m integration
+
+# Capture a live SOFI option chain fixture (run on a trading day)
+python -m wheel.tools.capture_chain SOFI
+```
 
 ## Deployment
 

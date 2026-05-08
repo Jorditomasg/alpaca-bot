@@ -1,6 +1,8 @@
 # Credentials & state — NEVER commit these
 .env
 *.json
+# Allow committed test fixtures
+!tests/fixtures/**/*.json
 
 # Python
 __pycache__/
@@ -15,3 +17,6 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# SDD / Agent infra (regenerable, machine-specific paths)
+.atl/
