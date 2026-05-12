@@ -31,8 +31,11 @@ async def dispatch(update: dict) -> None:
         reply = "Command failed. See server logs."
 
     if reply:
-        # Attach the reply keyboard so it remains visible / one-tap accessible.
-        await client.send_message(reply, reply_markup=default_reply_keyboard())
+        # The reply keyboard is only attached to /help replies — that's the
+        # "command panel". Other commands get plain replies; if the user has
+        # previously opened the keyboard via /help it persists on its own.
+        markup = default_reply_keyboard() if cmd == "help" else None
+        await client.send_message(reply, reply_markup=markup)
 
 
 async def run_poller() -> None:

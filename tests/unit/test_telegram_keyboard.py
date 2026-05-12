@@ -18,10 +18,15 @@ def test_default_keyboard_includes_core_commands():
     assert "/resume wheel" in texts
 
 
-def test_bot_menu_has_all_commands_with_descriptions():
+def test_bot_menu_only_has_read_only_commands():
+    """Pause/resume are excluded from the native bot menu — they live in
+    the reply keyboard surfaced by /help.
+    """
     cmds = bot_menu_commands()
     names = {c["command"] for c in cmds}
-    assert {"status", "positions", "pnl", "pause", "resume", "help"} <= names
+    assert names == {"status", "positions", "pnl", "help"}
+    assert "pause" not in names
+    assert "resume" not in names
     for c in cmds:
-        assert c["description"]  # non-empty
-        assert not c["command"].startswith("/")  # bot-menu commands are bare
+        assert c["description"]
+        assert not c["command"].startswith("/")

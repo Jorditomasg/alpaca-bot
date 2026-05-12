@@ -23,14 +23,12 @@ def default_reply_keyboard() -> dict:
 def bot_menu_commands() -> list[dict]:
     """Commands shown in Telegram's native bot menu (setMyCommands).
 
-    The icon appears next to the input field. Tapping a row inserts the
-    command into the input box; the user confirms with send.
+    Read-only / discovery commands only. Pause/resume are excluded from
+    the menu — they appear in the reply keyboard that `/help` brings up.
     """
     return [
         {"command": "status", "description": "Snapshot of all strategies"},
         {"command": "positions", "description": "Open positions + unrealized PnL"},
         {"command": "pnl", "description": "Day PnL and equity"},
-        {"command": "pause", "description": "Pause a strategy (e.g. /pause wheel)"},
-        {"command": "resume", "description": "Resume a strategy"},
-        {"command": "help", "description": "List all commands"},
+        {"command": "help", "description": "Show command panel"},
     ]
