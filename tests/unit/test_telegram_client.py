@@ -87,3 +87,69 @@ async def test_get_updates_returns_results(monkeypatch):
 
     assert len(updates) == 1
     assert updates[0]["update_id"] == 1
+
+
+async def test_send_message_includes_reply_markup_when_provided(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "1")
+    captured = {}
+
+    async def fake_post(self, url, json):
+        captured["json"] = json
+        return _ok({"message_id": 1})
+
+    markup = {"keyboard": [[{"text": "/status"}]], "is_persistent": True}
+    with patch.object(httpx.AsyncClient, "post", new=fake_post):
+        ok = await client.send_message("hi", reply_markup=markup)
+
+    assert ok is True
+    assert captured["json"]["reply_markup"] == markup
+
+
+async def test_send_message_omits_reply_markup_when_not_provided(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "1")
+    captured = {}
+
+    async def fake_post(self, url, json):
+        captured["json"] = json
+        return _ok({"message_id": 1})
+
+    with patch.object(httpx.AsyncClient, "post", new=fake_post):
+        await client.send_message("hi")
+
+    assert "reply_markup" not in captured["json"]
+
+
+async def test_set_my_commands_posts_correct_payload(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "1")
+    captured = {}
+
+    async def fake_post(self, url, json):
+        captured["url"] = url
+        captured["json"] = json
+        return _ok([])
+
+    cmds = [{"command": "status", "description": "x"}]
+    with patch.object(httpx.AsyncClient, "post", new=fake_post):
+        ok = await client.set_my_commands(cmds)
+
+    assert ok is True
+    assert captured["url"].endswith("/setMyCommands")
+    assert captured["json"] == {"commands": cmds}
+
+
+async def test_set_my_commands_noop_when_disabled(monkeypatch):
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    called = {"n": 0}
+
+    async def fake_post(self, url, json):
+        called["n"] += 1
+        return _ok([])
+
+    with patch.object(httpx.AsyncClient, "post", new=fake_post):
+        ok = await client.set_my_commands([{"command": "x", "description": "y"}])
+
+    assert ok is False
+    assert called["n"] == 0

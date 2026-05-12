@@ -10,18 +10,25 @@ _BASE = "https://api.telegram.org"
 _TIMEOUT = httpx.Timeout(connect=10.0, read=35.0, write=10.0, pool=10.0)
 
 
-async def send_message(text: str) -> bool:
-    """Send `text` to the configured chat. Returns True on success."""
+async def send_message(text: str, reply_markup: dict | None = None) -> bool:
+    """Send `text` to the configured chat. Returns True on success.
+
+    `reply_markup` is an optional Telegram markup object (e.g. ReplyKeyboardMarkup
+    from telegram_bot.keyboard). When provided, attached to the request.
+    """
     if not config.is_enabled():
         return False
 
     url = f"{_BASE}/bot{config.bot_token()}/sendMessage"
-    payload = {
+    payload: dict = {
         "chat_id": config.chat_id(),
         "text": text,
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
+
     for attempt in range(2):
         try:
             async with httpx.AsyncClient(timeout=_TIMEOUT) as h:
@@ -67,3 +74,20 @@ async def get_updates(offset: int, timeout: int = 30) -> list[dict]:
             return data.get("result", [])
     except (httpx.ConnectError, httpx.ReadError, httpx.TimeoutException):
         return []
+
+
+async def set_my_commands(commands: list[dict]) -> bool:
+    """Register the bot's command menu (setMyCommands). One-shot, idempotent."""
+    if not config.is_enabled():
+        return False
+    url = f"{_BASE}/bot{config.bot_token()}/setMyCommands"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as h:
+            resp = await h.post(url, json={"commands": commands})
+            if resp.status_code != 200:
+                print(f"[TELEGRAM] setMyCommands {resp.status_code}: {resp.text[:200]}")
+                return False
+            return True
+    except (httpx.ConnectError, httpx.ReadError, httpx.TimeoutException) as e:
+        print(f"[TELEGRAM] setMyCommands network error: {e}")
+        return False

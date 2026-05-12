@@ -1,9 +1,12 @@
 """Long-poll loop. Filters by chat_id, dispatches commands to handlers,
-sends replies. Backs off on errors; never dies.
+sends replies (with a persistent reply keyboard). Backs off on errors; never dies.
+
+On startup it also registers the native bot-menu commands via setMyCommands.
 """
 import asyncio
 
 from telegram_bot import client, commands, config
+from telegram_bot.keyboard import default_reply_keyboard, bot_menu_commands
 
 
 async def dispatch(update: dict) -> None:
@@ -28,7 +31,8 @@ async def dispatch(update: dict) -> None:
         reply = "Command failed. See server logs."
 
     if reply:
-        await client.send_message(reply)
+        # Attach the reply keyboard so it remains visible / one-tap accessible.
+        await client.send_message(reply, reply_markup=default_reply_keyboard())
 
 
 async def run_poller() -> None:
@@ -36,6 +40,13 @@ async def run_poller() -> None:
     if not config.is_enabled():
         print("[TELEGRAM] disabled (no token / chat_id) — poller not started")
         return
+
+    # Register the native command menu once at startup. Failure is logged
+    # but non-fatal — the reply keyboard still works without it.
+    try:
+        await client.set_my_commands(bot_menu_commands())
+    except Exception as e:
+        print(f"[TELEGRAM] setMyCommands failed: {e}")
 
     print("[TELEGRAM] poller started")
     offset = 0
