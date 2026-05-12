@@ -45,13 +45,24 @@ def load() -> dict:
     cfg = get_config()
     if STATE_FILE.exists():
         s = json.loads(STATE_FILE.read_text())
-        # Backward-compat migration: old files have no strategy_type
+        # Backward-compat migration: old files have no strategy_type.
+        # In-flight cycles (stage != IDLE) must preserve csp — there is a real
+        # contract open and we cannot retroactively reinterpret it as a spread.
+        # IDLE legacy state has nothing in flight, so respect cfg.strategy_type
+        # instead of stranding users on csp when their capital fits a spread.
         if "strategy_type" not in s:
-            s["strategy_type"] = "csp"  # preserve any in-flight CSP cycle
-            print(
-                "[WHEEL] Legacy state detected → strategy_type defaulted to 'csp'. "
-                "Set WHEEL_STRATEGY_TYPE=bull_put_spread on the next fresh cycle."
-            )
+            if s.get("stage", "IDLE") == "IDLE":
+                s["strategy_type"] = cfg.strategy_type
+                print(
+                    f"[WHEEL] Legacy state detected (IDLE) → strategy_type adopted from "
+                    f"config: {cfg.strategy_type!r}."
+                )
+            else:
+                s["strategy_type"] = "csp"  # preserve in-flight CSP cycle
+                print(
+                    "[WHEEL] Legacy state detected (in-flight) → strategy_type "
+                    "preserved as 'csp'. Wait for IDLE before flipping strategy."
+                )
         # Backfill spread fields absent in legacy CSP state files
         s.setdefault("short_symbol", None)
         s.setdefault("short_strike", None)

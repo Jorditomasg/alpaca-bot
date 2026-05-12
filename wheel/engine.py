@@ -24,6 +24,7 @@ from __future__ import annotations
 from datetime import date
 
 from shared import alpaca_client
+import shared.kill_switch as kill_switch
 import wheel.options as options_mod
 import wheel.spreads as spreads_mod
 from wheel.config import get_config
@@ -68,7 +69,9 @@ def _run_spread_cycle(state: dict) -> dict:
     stage = state["stage"]
 
     if stage == "IDLE":
-        # Capital guard applies only when opening new positions, not when closing
+        # New-position gates: kill switch first (global), then capital guard.
+        if _kill_switch_blocks_new_entries("spread"):
+            return state
         if _capital_guard(state, cfg.min_buying_power, "spread"):
             return state
         return _open_spread(state, cfg)
@@ -234,6 +237,32 @@ def _reset_spread_fields(state: dict) -> dict:
     return state
 
 
+# ── Kill switch (global drawdown) ────────────────────────────────────────────
+
+def _kill_switch_blocks_new_entries(label: str) -> bool:
+    """Return True if global drawdown halt is active and this is a new entry.
+
+    Updates the kill-switch state with current equity, then checks the halt.
+    Exits are never blocked — only new positions go through this gate.
+    """
+    try:
+        client = alpaca_client.trading()
+        equity = float(client.get_account().equity)
+    except Exception as e:
+        print(f"[WHEEL] Could not fetch equity for kill switch: {e}")
+        return False  # Fail open: don't trap the bot offline if equity check fails
+
+    ks_state = kill_switch.update(equity)
+    kill_switch.save(ks_state)
+    if ks_state.get("halted"):
+        reason = ks_state.get("halt_reason", "")
+        # Latch a single log per cycle via the wheel state itself? Simpler:
+        # the wheel cycle runs every 15min so log spam is bounded.
+        print(f"[WHEEL] KILL-SWITCH ACTIVE ({label}) — {reason}")
+        return True
+    return False
+
+
 # ── Capital guard ─────────────────────────────────────────────────────────────
 
 def _capital_guard(state: dict, required: float, label: str) -> bool:
@@ -269,6 +298,9 @@ def _capital_guard(state: dict, required: float, label: str) -> bool:
 # ── CSP helper functions (unchanged from original) ───────────────────────────
 
 def _open_put(state: dict, symbol: str) -> dict:
+    if _kill_switch_blocks_new_entries("csp"):
+        return state
+
     price = _get_stock_price(symbol)
     if not price:
         return state
@@ -278,14 +310,15 @@ def _open_put(state: dict, symbol: str) -> dict:
         print(f"[WHEEL] No suitable put found for {symbol}")
         return state
 
-    # Cash-secured put check: need strike × 100 in buying power
-    client = alpaca_client.trading()
-    acct = client.get_account()
+    # Cash-secured put check: need strike × 100 in buying power.
+    # Route through _capital_guard so the "Insufficient buying power" log is
+    # latched by (rounded_bp, cycles) — preventing per-cycle spam when the
+    # account is chronically under-funded for CSP collateral.
     required_cash = contract["strike"] * 100
-    if float(acct.buying_power) < required_cash:
-        print(f"[WHEEL] Insufficient buying power ${acct.buying_power} < ${required_cash}")
+    if _capital_guard(state, required_cash, "csp"):
         return state
 
+    client = alpaca_client.trading()
     try:
         order = client.submit_order(LimitOrderRequest(
             symbol=contract["symbol"],

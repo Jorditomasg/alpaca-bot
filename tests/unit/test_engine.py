@@ -632,3 +632,119 @@ def test_csp_does_not_reach_spread_open(mocker):
     result = eng.run_cycle(state)
 
     assert result["stage"] != "SPREAD_OPEN"
+
+
+# ── CSP capital-guard latch (no-spam regression) ─────────────────────────────
+
+
+def test_csp_open_put_logs_insufficient_bp_once_per_bucket(mocker, capsys):
+    """CSP _open_put must NOT spam 'Insufficient buying power' every cycle.
+
+    Regression: the CSP path printed the log unconditionally per cycle while
+    the spread path uses a (rounded_bp, cycles) latch. Both paths must latch.
+    """
+    import wheel.engine as eng
+
+    # Stock price + best_put → required_cash = strike * 100 = $40,500
+    mocker.patch.object(eng, "_get_stock_price", return_value=410.0)
+    mocker.patch("wheel.options.best_put", return_value={
+        "symbol": "TSLA260117P00405000",
+        "strike": 405.0,
+        "expiry": "2026-01-17",
+        "premium": 3.50,
+    })
+
+    mock_client = MagicMock()
+    mock_client.get_account.return_value = MagicMock(buying_power="172.69")
+    mocker.patch("shared.alpaca_client.trading", return_value=mock_client)
+
+    state = _csp_state(stage="IDLE")
+
+    # First cycle — must log once
+    eng.run_cycle(state)
+    out1 = capsys.readouterr().out
+    assert out1.count("Insufficient buying power") == 1
+
+    # Same buying power, same cycles bucket → silent
+    eng.run_cycle(state)
+    out2 = capsys.readouterr().out
+    assert "Insufficient buying power" not in out2, (
+        f"CSP path logged again on identical bucket — spam regression: {out2!r}"
+    )
+
+    mock_client.submit_order.assert_not_called()
+
+
+def test_kill_switch_blocks_new_spread_entry(mocker, capsys, monkeypatch, tmp_path):
+    """When global drawdown halt is active, IDLE → IDLE (no spread opened)."""
+    import wheel.engine as eng
+    import shared.kill_switch as ks
+    monkeypatch.setattr(ks, "STATE_FILE", tmp_path / "ks.json")
+    # Pre-trip the kill switch: peak $1000 → drop to $700 (-30%, well past 20%)
+    ks.save(ks.update(700.0, ks.update(1000.0)))
+
+    mock_client = MagicMock()
+    # Equity must be a real float for kill_switch.update to work
+    mock_client.get_account.return_value = MagicMock(buying_power="10000", equity="700.0")
+    mocker.patch("shared.alpaca_client.trading", return_value=mock_client)
+
+    state = _spread_state(stage="IDLE")
+    result = eng.run_cycle(state)
+
+    assert result["stage"] == "IDLE"
+    mock_client.submit_order.assert_not_called()
+    out = capsys.readouterr().out
+    assert "KILL-SWITCH" in out
+
+
+def test_kill_switch_does_not_block_spread_close(mocker, monkeypatch, tmp_path):
+    """Even when halt is active, an open SPREAD must be allowed to close (exit)."""
+    import wheel.engine as eng
+    import shared.kill_switch as ks
+    monkeypatch.setattr(ks, "STATE_FILE", tmp_path / "ks.json")
+    ks.save(ks.update(700.0, ks.update(1000.0)))
+
+    mock_client = MagicMock()
+    mock_client.get_account.return_value = MagicMock(buying_power="10000", equity="700.0")
+    mocker.patch("shared.alpaca_client.trading", return_value=mock_client)
+    # Force profit-take path
+    mocker.patch.object(eng, "_get_option_quote", side_effect=[
+        {"bid": 0.15, "ask": 0.18},
+        {"bid": 0.04, "ask": 0.05},
+    ])
+
+    state = _spread_state(stage="SPREAD_OPEN", net_credit=50.0)
+    state["contract_expiry"] = _EXPIRY_FUTURE
+    result = eng.run_cycle(state)
+
+    # Close went through despite halt
+    assert result["stage"] == "IDLE"
+    mock_client.submit_order.assert_called_once()
+
+
+def test_csp_open_put_relogs_on_bp_change(mocker, capsys):
+    """When BP changes meaningfully, CSP path re-logs (new bucket)."""
+    import wheel.engine as eng
+
+    mocker.patch.object(eng, "_get_stock_price", return_value=410.0)
+    mocker.patch("wheel.options.best_put", return_value={
+        "symbol": "TSLA260117P00405000",
+        "strike": 405.0,
+        "expiry": "2026-01-17",
+        "premium": 3.50,
+    })
+
+    mock_client = MagicMock()
+    mocker.patch("shared.alpaca_client.trading", return_value=mock_client)
+
+    state = _csp_state(stage="IDLE")
+
+    mock_client.get_account.return_value = MagicMock(buying_power="172.69")
+    eng.run_cycle(state)
+    capsys.readouterr()
+
+    # BP drops $5 — new bucket → re-log
+    mock_client.get_account.return_value = MagicMock(buying_power="167.50")
+    eng.run_cycle(state)
+    out = capsys.readouterr().out
+    assert "Insufficient buying power" in out

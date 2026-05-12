@@ -15,8 +15,41 @@ def _write_state(tmp_path: Path, data: dict) -> Path:
 
 # ── legacy-file migration ────────────────────────────────────────────────────
 
-def test_legacy_csp_file_gets_strategy_type_csp(tmp_path, monkeypatch, capsys):
-    """Old state files without strategy_type must load with strategy_type='csp'."""
+def test_legacy_in_flight_csp_preserves_csp(tmp_path, monkeypatch, capsys):
+    """Legacy state with stage != IDLE must preserve csp — in-flight cycle is sacred."""
+    legacy = {
+        "stage": "PUT_OPEN",
+        "symbol": "TSLA",
+        "contract_symbol": "TSLA260117P00090000",
+        "contract_strike": 90.0,
+        "contract_expiry": "2026-01-17",
+        "premium_received": 60.0,
+        "total_premium": 60.0,
+        "cost_basis": None,
+        "shares_owned": 0,
+        "cycles": 3,
+    }
+    state_file = _write_state(tmp_path, legacy)
+    monkeypatch.setattr(state_mod, "STATE_FILE", state_file)
+
+    s = state_mod.load()
+    assert s["strategy_type"] == "csp", (
+        "In-flight CSP must be preserved even when cfg defaults to spread"
+    )
+
+    # Migration banner must be printed exactly once
+    captured = capsys.readouterr()
+    assert "Legacy state detected" in captured.out
+
+
+def test_legacy_idle_state_respects_config_strategy(tmp_path, monkeypatch, capsys):
+    """Legacy IDLE state must adopt cfg.strategy_type (no in-flight cycle to preserve).
+
+    Regression: previously, any legacy file without strategy_type was forced to
+    'csp', stranding users on a CSP wheel with insufficient capital. When IDLE,
+    there is nothing in flight to preserve and the config default must win.
+    """
+    monkeypatch.setenv("WHEEL_STRATEGY_TYPE", "bull_put_spread")
     legacy = {
         "stage": "IDLE",
         "symbol": "TSLA",
@@ -27,17 +60,13 @@ def test_legacy_csp_file_gets_strategy_type_csp(tmp_path, monkeypatch, capsys):
         "total_premium": 0.0,
         "cost_basis": None,
         "shares_owned": 0,
-        "cycles": 3,
+        "cycles": 0,
     }
     state_file = _write_state(tmp_path, legacy)
     monkeypatch.setattr(state_mod, "STATE_FILE", state_file)
 
     s = state_mod.load()
-    assert s["strategy_type"] == "csp"
-
-    # Migration banner must be printed exactly once
-    captured = capsys.readouterr()
-    assert "Legacy state detected" in captured.out
+    assert s["strategy_type"] == "bull_put_spread"
 
 
 def test_legacy_file_gets_spread_fields_as_none(tmp_path, monkeypatch):

@@ -83,6 +83,38 @@ open http://localhost:7080
 | `ALPACA_SECRET_KEY` | Alpaca secret key |
 | `ALPACA_BASE_URL` | `https://paper-api.alpaca.markets/v2` for paper trading |
 
+### Telegram Notifications (optional)
+
+The bot can push trade alerts, error notifications, and a daily summary to a Telegram chat, and accept commands like `/status`, `/positions`, `/pnl`, `/pause wheel`, `/resume wheel`.
+
+Setup:
+
+1. Talk to [@BotFather](https://t.me/BotFather) → `/newbot` → copy the token.
+2. Find your numeric chat ID by sending any message to your new bot, then visiting:
+   `https://api.telegram.org/bot<TOKEN>/getUpdates`
+   The number under `chat.id` is yours.
+3. Set the two env vars in `.env`:
+
+| Variable | Description |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | From @BotFather. Leave empty to disable. |
+| `TELEGRAM_CHAT_ID` | Your numeric Telegram user ID (allowlist). |
+
+4. Restart the bot.
+
+Commands available in chat:
+
+| Command | Effect |
+|---|---|
+| `/status` | Snapshot of all strategies |
+| `/positions` | Open positions with unrealized P&L |
+| `/pnl` | Day P&L and equity |
+| `/pause <trailing\|copy\|wheel\|all>` | Pause a strategy (in-memory; restart resumes) |
+| `/resume <trailing\|copy\|wheel\|all>` | Resume |
+| `/help` | List commands |
+
+If the token is unset, Telegram features are silently disabled — the rest of the bot runs normally.
+
 ### Wheel Strategy Variables
 
 | Variable | Type | Default | Description |
