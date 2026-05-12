@@ -1,12 +1,15 @@
 from telegram_bot import formatter as f
 
 
-def test_escape_md_escapes_reserved_chars():
-    assert f.escape_md("hello.world") == r"hello\.world"
-    assert f.escape_md("a-b") == r"a\-b"
-    src = "_*[]()~`>#+-=|{}.!"
-    out = f.escape_md(src)
-    assert out == "".join(f"\\{c}" for c in src)
+def test_html_escape_basic():
+    assert f.html_escape("a<b>c") == "a&lt;b&gt;c"
+    assert f.html_escape("a & b") == "a &amp; b"
+    assert f.html_escape("normal.text") == "normal.text"
+
+
+def test_escape_md_is_alias_for_html_escape():
+    """Backwards-compat shim."""
+    assert f.escape_md("a<b>") == f.html_escape("a<b>")
 
 
 def test_format_trade_buy():
@@ -21,8 +24,10 @@ def test_format_trade_buy():
     assert "TRAILING" in msg
     assert "BUY" in msg
     assert "TSLA" in msg
-    assert r"245\.30" in msg
-    assert r"Ladder \-22" in msg
+    assert "$245.30" in msg
+    assert "Ladder -22%" in msg
+    assert "<b>[TRAILING]</b>" in msg
+    assert "<i>" in msg and "</i>" in msg
 
 
 def test_format_trade_sell_with_notional():
@@ -36,20 +41,30 @@ def test_format_trade_sell_with_notional():
         reason="Floor breached",
     )
     assert "SELL" in msg
-    assert r"$125\.00" in msg  # $ is not reserved in MarkdownV2, but . is
+    assert "$125.00" in msg
+
+
+def test_format_trade_escapes_symbol():
+    """Ticker with HTML-reserved chars must be escaped (paranoia)."""
+    msg = f.format_trade(strategy="trailing", side="buy", symbol="A<B>",
+                          qty=1, price=1.0)
+    assert "A&lt;B&gt;" in msg
+    assert "<A" not in msg.replace("<b>", "").replace("</b>", "").replace("<i>", "").replace("</i>", "")
 
 
 def test_format_error_has_alarm_prefix():
     msg = f.format_error(task="wheel_task", error="ConnectionRefused")
     assert msg.startswith("🚨")
-    assert r"wheel\_task" in msg  # _ is reserved → escaped
+    assert "wheel_task" in msg
     assert "ConnectionRefused" in msg
+    assert "<b>[ERROR]</b>" in msg
 
 
 def test_format_warn_has_warn_prefix():
     msg = f.format_warn(scope="WHEEL", message="Buying power $312 < $400")
     assert msg.startswith("⚠️")
     assert "WHEEL" in msg
+    assert "&lt;" in msg  # `<` escaped
 
 
 def test_format_state_transition():
@@ -59,10 +74,10 @@ def test_format_state_transition():
         details={"floor": 221.22, "symbol": "TSLA"},
     )
     assert "TRAILING" in msg
-    assert r"221\.22" in msg
+    assert "$221.22" in msg
 
 
-def test_format_daily_summary_is_code_block():
+def test_format_daily_summary_is_pre_block():
     rendered = f.format_daily_summary(
         date_str="2026-05-12",
         trailing={"symbol": "TSLA", "qty": 0.12, "entry": 245.30, "floor": 231.22, "day_pct": 1.2},
@@ -70,8 +85,8 @@ def test_format_daily_summary_is_code_block():
         wheel={"symbol": "SOFI", "stage": "SPREAD_OPEN", "credit_week": 1.23, "day_pct": 0.6},
         account={"equity": 10234.5, "day_pct": 0.8, "buying_power": 4512.0},
     )
-    assert rendered.startswith("```")
-    assert rendered.rstrip().endswith("```")
+    assert rendered.startswith("<pre>")
+    assert rendered.rstrip().endswith("</pre>")
     assert "TSLA" in rendered
     assert "Pelosi" in rendered
     assert "SPREAD_OPEN" in rendered

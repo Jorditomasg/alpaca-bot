@@ -31,7 +31,7 @@ import wheel.monitor as wheel_monitor
 import wheel.summary as wheel_summary
 from telegram_bot import notifier as tg_notifier
 from telegram_bot import client as tg_client
-from telegram_bot.formatter import escape_md
+from telegram_bot.formatter import html_escape
 
 import os
 
@@ -176,7 +176,10 @@ async def trailing_task():
                         notional=action.notional, price=price, reason=action.reason,
                     )
                 elif action.type == "sell":
-                    shared_trader.sell(symbol, qty=current["position_qty"])
+                    # Use close_position (atomic full exit) — avoids the
+                    # fractional drift between locally-tracked qty and the
+                    # broker's actual qty after a series of notional buys.
+                    shared_trader.close_position(symbol)
                     await tg_notifier.notify_trade(
                         strategy="trailing", side="sell", symbol=symbol,
                         qty=current["position_qty"], price=price, reason=action.reason,
@@ -249,8 +252,8 @@ async def copy_task():
                 tickers = ", ".join(t["ticker"] for t in new_trades[:5])
                 more = "" if len(new_trades) <= 5 else f" (+{len(new_trades)-5} more)"
                 await tg_client.send_message(
-                    f"*\\[COPY\\]* Executed {len(new_trades)} trades: "
-                    f"{escape_md(tickers)}{escape_md(more)}"
+                    f"<b>[COPY]</b> Executed {len(new_trades)} trades: "
+                    f"{html_escape(tickers)}{html_escape(more)}"
                 )
             except Exception as e:
                 print(f"[COPY] Batch execution failed: {e}")

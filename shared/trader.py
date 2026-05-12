@@ -49,6 +49,19 @@ def sell(symbol: str, qty: float = None, notional: float = None):
     return order
 
 
+def close_position(symbol: str):
+    """Close the entire open position for `symbol` at market.
+
+    Use this for full-exit (stop loss, take profit) instead of `sell(qty=...)`
+    when the local qty might have drifted from the broker's actual position
+    due to fractional rounding on prior notional buys.
+    """
+    client = alpaca_client.trading()
+    order = client.close_position(symbol)
+    print(f"[TRADER] CLOSE {symbol} | submitted")
+    return order
+
+
 def get_latest_price(symbol: str) -> float:
     client = alpaca_client.stock_data()
     trade = client.get_stock_latest_trade(StockLatestTradeRequest(symbol_or_symbols=symbol))

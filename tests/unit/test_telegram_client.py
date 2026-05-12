@@ -26,7 +26,7 @@ async def test_send_message_calls_correct_endpoint(monkeypatch):
     assert captured["url"].endswith("/bot999:tok/sendMessage")
     assert captured["json"]["chat_id"] == 7
     assert captured["json"]["text"] == "hello"
-    assert captured["json"]["parse_mode"] == "MarkdownV2"
+    assert captured["json"]["parse_mode"] == "HTML"
 
 
 async def test_send_message_retries_once_on_network_error(monkeypatch):

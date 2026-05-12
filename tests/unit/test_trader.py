@@ -43,6 +43,17 @@ def test_get_recent_bars_returns_empty_on_failure(mocker, capsys):
     assert "failed" in out.lower()
 
 
+def test_close_position_delegates_to_client(mocker):
+    """close_position must call client.close_position(symbol) — atomic full exit."""
+    mock_client = MagicMock()
+    mock_client.close_position.return_value = MagicMock(id="ord-123")
+    mocker.patch("shared.alpaca_client.trading", return_value=mock_client)
+
+    order = trader.close_position("TSLA")
+    mock_client.close_position.assert_called_once_with("TSLA")
+    assert order.id == "ord-123"
+
+
 def test_get_recent_bars_trims_to_requested_window(mocker):
     """When more bars come back than requested, trim to the most recent N."""
     fake_bars = [
