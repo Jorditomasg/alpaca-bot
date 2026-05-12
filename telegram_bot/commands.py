@@ -1,6 +1,5 @@
 """Parse and handle inbound Telegram commands. Handlers return strings
-that the poller forwards to `client.send_message`. Pure logic where
-possible — no direct I/O.
+that the poller forwards to `client.send_message` (HTML parse mode).
 """
 from __future__ import annotations
 from typing import Optional
@@ -10,12 +9,12 @@ from shared.control import ControlFlags, flags as default_flags
 _VALID_STRATEGIES = {"trailing", "copy", "wheel", "all"}
 
 _HELP_TEXT = (
-    "*Available commands*\n"
+    "<b>Available commands</b>\n"
     "/status — snapshot of all strategies\n"
     "/positions — open positions + unrealized PnL\n"
     "/pnl — day PnL and equity\n"
-    "/pause <trailing\\|copy\\|wheel\\|all> — pause a strategy\n"
-    "/resume <trailing\\|copy\\|wheel\\|all> — resume a strategy\n"
+    "/pause &lt;trailing|copy|wheel|all&gt; — pause a strategy\n"
+    "/resume &lt;trailing|copy|wheel|all&gt; — resume a strategy\n"
     "/help — this message"
 )
 
@@ -52,13 +51,13 @@ async def handle(command: str, args: list[str], *, control_flags: ControlFlags |
 
 def _do_pause(args: list[str], cf: ControlFlags) -> str:
     if not args or args[0] not in _VALID_STRATEGIES:
-        return "Invalid argument. Use /pause <trailing|copy|wheel|all>."
+        return "Invalid argument. Use /pause &lt;trailing|copy|wheel|all&gt;."
     cf.pause(args[0])
     return f"Paused {args[0]}"
 
 
 def _do_resume(args: list[str], cf: ControlFlags) -> str:
     if not args or args[0] not in _VALID_STRATEGIES:
-        return "Invalid argument. Use /resume <trailing|copy|wheel|all>."
+        return "Invalid argument. Use /resume &lt;trailing|copy|wheel|all&gt;."
     cf.resume(args[0])
     return f"Resumed {args[0]}"

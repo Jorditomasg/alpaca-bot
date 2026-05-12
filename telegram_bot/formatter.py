@@ -1,28 +1,27 @@
-"""Pure functions that turn event data into Telegram MarkdownV2 strings.
+"""Pure functions that turn event data into Telegram HTML strings.
 
-No I/O. All dynamic text passes through escape_md to avoid parse errors.
-Code blocks (triple backticks) only need backtick escaping inside.
+No I/O. Dynamic text passes through html_escape so user-controlled strings
+(symbols, politician names, error messages) cannot break HTML parsing.
+
+HTML parse_mode rules (much simpler than MarkdownV2):
+  - escape `<`, `>`, `&` in any user text
+  - allowed tags: <b>, <strong>, <i>, <em>, <u>, <s>, <code>, <pre>, <a>
+  - everything else (`.`, `+`, `(`, `)`, `|`, `$`, etc.) is literal
 """
-_RESERVED = r"_*[]()~`>#+-=|{}.!"
+import html
 
 
-def escape_md(s) -> str:
-    """Escape MarkdownV2 reserved characters in arbitrary text."""
-    out = []
-    for ch in str(s):
-        if ch in _RESERVED:
-            out.append("\\")
-        out.append(ch)
-    return "".join(out)
+def html_escape(s) -> str:
+    return html.escape(str(s), quote=False)
 
 
 def _money(v: float) -> str:
-    return escape_md(f"${v:.2f}")
+    return f"${v:.2f}"
 
 
 def _pct(v: float) -> str:
     sign = "+" if v >= 0 else ""
-    return escape_md(f"{sign}{v:.1f}%")
+    return f"{sign}{v:.1f}%"
 
 
 def format_trade(strategy, side, symbol, qty=None, notional=None, price=None, reason=""):
@@ -31,48 +30,47 @@ def format_trade(strategy, side, symbol, qty=None, notional=None, price=None, re
     if notional is not None:
         amt = _money(notional)
     elif qty is not None:
-        amt = escape_md(f"{qty:.4f}")
+        amt = f"{qty:.4f}"
     else:
         amt = "?"
     price_str = _money(price) if price is not None else "?"
-    reason_str = escape_md(reason) if reason else ""
-    parts = [f"*\\[{strat}\\]* {side_u} {amt} {escape_md(symbol)} @ {price_str}"]
-    if reason_str:
-        parts.append(f"_{reason_str}_")
+    parts = [f"<b>[{strat}]</b> {side_u} {amt} {html_escape(symbol)} @ {price_str}"]
+    if reason:
+        parts.append(f"<i>{html_escape(reason)}</i>")
     return "\n".join(parts)
 
 
 def format_state(strategy, event, details: dict):
     strat = strategy.upper()
     if event == "trailing_active":
-        return f"*\\[{strat}\\]* Trailing active — floor {_money(details['floor'])}"
+        return f"<b>[{strat}]</b> Trailing active — floor {_money(details['floor'])}"
     if event == "ladder_fired":
-        return (f"*\\[{strat}\\]* {escape_md(details['label'])} @ "
+        return (f"<b>[{strat}]</b> {html_escape(details['label'])} @ "
                 f"{_money(details['price'])} — bought {_money(details['amount'])}")
     if event == "spread_opened":
-        return (f"*\\[{strat}\\]* Spread opened {escape_md(details['symbol'])} "
+        return (f"<b>[{strat}]</b> Spread opened {html_escape(details['symbol'])} "
                 f"{_money(details['short_strike'])}/{_money(details['long_strike'])} — "
                 f"credit {_money(details['credit'])}")
     if event == "spread_closed":
-        return (f"*\\[{strat}\\]* Spread closed @ {_pct(details['profit_pct'])} — "
+        return (f"<b>[{strat}]</b> Spread closed @ {_pct(details['profit_pct'])} — "
                 f"{_money(details['pnl'])}")
     if event == "follow_change":
-        score_str = escape_md(f"{details['score']:.2f}")
-        return (f"*\\[{strat}\\]* Now following {escape_md(details['politician'])} "
-                f"\\(score {score_str}\\)")
-    return f"*\\[{strat}\\]* {escape_md(event)}"
+        score_str = f"{details['score']:.2f}"
+        return (f"<b>[{strat}]</b> Now following {html_escape(details['politician'])} "
+                f"(score {score_str})")
+    return f"<b>[{strat}]</b> {html_escape(event)}"
 
 
 def format_error(task: str, error: str) -> str:
-    return f"🚨 *\\[ERROR\\]* {escape_md(task)}: {escape_md(error)}"
+    return f"🚨 <b>[ERROR]</b> {html_escape(task)}: {html_escape(error)}"
 
 
 def format_warn(scope: str, message: str) -> str:
-    return f"⚠️ *\\[{escape_md(scope)}\\]* {escape_md(message)}"
+    return f"⚠️ <b>[{html_escape(scope)}]</b> {html_escape(message)}"
 
 
 def format_daily_summary(date_str, trailing, copy, wheel, account) -> str:
-    """Triple-backtick code block. Inside, only backticks would need escaping."""
+    """<pre>-wrapped block. Body is html-escaped as a single unit."""
     lines = []
     lines.append(f"📊 Daily Summary — {date_str}")
     lines.append("")
@@ -100,4 +98,11 @@ def format_daily_summary(date_str, trailing, copy, wheel, account) -> str:
         lines.append(f"  Equity: ${account['equity']:,.2f}  ({sign}{account['day_pct']:.1f}% day)")
         lines.append(f"  Buying power: ${account['buying_power']:,.2f}")
     body = "\n".join(lines)
-    return f"```\n{body}\n```"
+    return f"<pre>{html_escape(body)}</pre>"
+
+
+# ── Backwards-compat shim ───────────────────────────────────────────────────
+# Some call sites (e.g. scheduler.py copy_task batch message) imported
+# `escape_md` before we switched parse_mode. Alias to html_escape so existing
+# imports keep working and produce correct HTML-mode output.
+escape_md = html_escape

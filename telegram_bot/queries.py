@@ -1,12 +1,18 @@
 """Read-only formatters used by /status, /positions, /pnl commands.
 
-Wraps each Alpaca call in try/except — never raises into the poller.
+Output is in Telegram HTML parse mode — dynamic strings pass through
+html.escape; literal chars like `.`, `(`, `$` are NOT reserved.
 """
 import asyncio
+import html as html_lib
 from shared import alpaca_client
 import trailing.state as trailing_state
 import copy_trader.state as copy_state
 import wheel.state as wheel_state
+
+
+def _esc(s) -> str:
+    return html_lib.escape(str(s), quote=False)
 
 
 async def format_status() -> str:
@@ -16,22 +22,22 @@ async def format_status() -> str:
     c = await loop.run_in_executor(None, copy_state.load)
     w = await loop.run_in_executor(None, wheel_state.load)
 
-    lines = ["*Status*"]
+    lines = ["<b>Status</b>"]
     if t:
         active = "active" if t.get("trailing_active") else "armed"
         lines.append(
-            f"Trailing {t['symbol']}: {t['position_qty']:.4f} sh @ "
-            f"\\${t['entry_price']:.2f}, floor \\${t['floor']:.2f} ({active})"
+            f"Trailing {_esc(t['symbol'])}: {t['position_qty']:.4f} sh @ "
+            f"${t['entry_price']:.2f}, floor ${t['floor']:.2f} ({active})"
         )
     else:
         lines.append("Trailing: no state (idle)")
     if c and c.get("following"):
         n = len((c.get("positions") or {}))
-        lines.append(f"Copy: following {c['following']}, {n} open")
+        lines.append(f"Copy: following {_esc(c['following'])}, {n} open")
     else:
         lines.append("Copy: no politician selected")
     if w:
-        lines.append(f"Wheel {w.get('symbol','?')}: stage {w.get('stage','?')}")
+        lines.append(f"Wheel {_esc(w.get('symbol','?'))}: stage {_esc(w.get('stage','?'))}")
     else:
         lines.append("Wheel: no state")
     return "\n".join(lines)
@@ -44,10 +50,10 @@ async def format_positions() -> str:
         client = alpaca_client.trading()
         positions = await loop.run_in_executor(None, client.get_all_positions)
     except Exception as e:
-        return f"Could not fetch positions: {e}"
+        return f"Could not fetch positions: {_esc(e)}"
     if not positions:
         return "No open positions."
-    lines = ["*Open positions*"]
+    lines = ["<b>Open positions</b>"]
     for p in positions:
         try:
             sym = p.symbol
@@ -56,7 +62,10 @@ async def format_positions() -> str:
             cur = float(p.current_price)
             pct = (cur - entry) / entry * 100 if entry else 0.0
             sign = "+" if pct >= 0 else ""
-            lines.append(f"{sym} {qty:.4f} @ \\${entry:.2f} → \\${cur:.2f} ({sign}{pct:.2f}%)")
+            lines.append(
+                f"{_esc(sym)} {qty:.4f} @ ${entry:.2f} → ${cur:.2f} "
+                f"({sign}{pct:.2f}%)"
+            )
         except Exception:
             continue
     return "\n".join(lines)
@@ -72,9 +81,9 @@ async def format_pnl() -> str:
         bp = float(acct.buying_power)
         day_pct = (equity - last) / last * 100 if last else 0.0
         sign = "+" if day_pct >= 0 else ""
-        return (f"*PnL*\n"
-                f"Equity: \\${equity:,.2f}\n"
-                f"Day: {sign}{day_pct:.1f}% (was \\${last:,.2f})\n"
-                f"Buying power: \\${bp:,.2f}")
+        return (f"<b>PnL</b>\n"
+                f"Equity: ${equity:,.2f}\n"
+                f"Day: {sign}{day_pct:.1f}% (was ${last:,.2f})\n"
+                f"Buying power: ${bp:,.2f}")
     except Exception as e:
-        return f"Could not fetch account: {e}"
+        return f"Could not fetch account: {_esc(e)}"
