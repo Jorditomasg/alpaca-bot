@@ -27,6 +27,7 @@ import copy_trader.copier  as copier
 import copy_trader.portfolio as portfolio
 import copy_trader.exits  as copy_exits
 import copy_trader.config as copy_config
+import copy_trader.reconcile as copy_reconcile
 import wheel.state   as wheel_state_mod
 import wheel.engine  as wheel_engine
 import wheel.monitor as wheel_monitor
@@ -204,6 +205,17 @@ async def copy_task():
     INTERVAL = 4 * 3600
     SCORE_INTERVAL = 24 * 3600
     consec_scrape_fail = 0
+
+    # One-shot reconciliation at startup — drops phantom positions left by
+    # earlier buggy code paths (e.g. mangled ETFIWD tickers) and backfills
+    # cost_basis from broker for legacy positions missing metadata.
+    try:
+        loop_init = asyncio.get_running_loop()
+        startup_state = await loop_init.run_in_executor(None, copy_state_mod.load)
+        await loop_init.run_in_executor(None, copy_reconcile.with_broker, startup_state)
+        await loop_init.run_in_executor(None, copy_state_mod.save, startup_state)
+    except Exception as e:
+        print(f"[COPY] startup reconcile failed: {e}")
 
     while True:
         await control.flags.wait_if_paused("copy")
