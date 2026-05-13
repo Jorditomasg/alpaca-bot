@@ -76,7 +76,13 @@ def _extract_trade_ids(html: str) -> list[str]:
 
 def _extract_cells(html: str) -> list[str]:
     tds = re.findall(r'<td[^>]*>(.+?)</td>', html, re.DOTALL)
-    return [re.sub(r'<[^>]+>', '', td).replace('&amp;', '&').strip() for td in tds]
+    cells = []
+    for td in tds:
+        # Replace tags with a space so adjacent <span>brand</span><span>TICKER</span>
+        # do not glue into "ETFIWD"-style mangled tickers.
+        text = re.sub(r'<[^>]+>', ' ', td).replace('&amp;', '&')
+        cells.append(re.sub(r'\s+', ' ', text).strip())
+    return cells
 
 
 def _parse_row(row: list[str], trade_id: str | None) -> dict | None:

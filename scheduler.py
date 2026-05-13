@@ -233,6 +233,10 @@ async def copy_task():
                 old = state.get("following")
                 state["following"] = top
                 state["last_scored"] = now_str
+                # Seed visible history so we copy only NEW trades after the switch.
+                # Otherwise the politician's already-published portfolio drains
+                # buying power on the first poll.
+                copier.seed_seen_ids_for(state, trades, top)
                 scores = scorer.score_all_politicians(trades)
                 await tg_notifier.notify_state(
                     "copy", "follow_change",

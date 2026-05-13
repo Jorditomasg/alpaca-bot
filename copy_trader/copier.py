@@ -8,6 +8,24 @@ import re
 _OPTION_UNDERLYING_RE = re.compile(r'^([A-Z]+)')
 
 
+def seed_seen_ids_for(
+    state: dict,
+    trades: list[dict],
+    politician: str,
+) -> None:
+    """Mark all currently-visible trades of `politician` as already-seen.
+
+    Used on follow-change so we copy only trades that appear AFTER the switch,
+    not the politician's historical positions still visible on the page.
+    """
+    seen = state.setdefault("seen_trade_ids", [])
+    seen_set = set(seen)
+    for t in trades:
+        if t["politician"].lower() == politician.lower() and t["id"] not in seen_set:
+            seen.append(t["id"])
+            seen_set.add(t["id"])
+
+
 def new_trades_to_copy(
     trades: list[dict],
     following: str,
