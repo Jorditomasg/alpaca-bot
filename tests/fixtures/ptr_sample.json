@@ -1,0 +1,62 @@
+[
+  {
+    "transaction_date": "11/10/2020",
+    "owner": "Self",
+    "ticker": "AAPL",
+    "asset_description": "Apple Inc.",
+    "asset_type": "Stock",
+    "type": "Purchase",
+    "amount": "$15,001 - $50,000",
+    "comment": "--",
+    "senator": "Jane Doe",
+    "ptr_link": "https://efdsearch.senate.gov/search/view/ptr/aaa-001/"
+  },
+  {
+    "transaction_date": "11/12/2020",
+    "owner": "Spouse",
+    "ticker": "MSFT",
+    "asset_description": "Microsoft Corp",
+    "asset_type": "Stock",
+    "type": "Sale (Full)",
+    "amount": "$50,001 - $100,000",
+    "comment": "--",
+    "senator": "Jane Doe",
+    "ptr_link": "https://efdsearch.senate.gov/search/view/ptr/aaa-002/"
+  },
+  {
+    "transaction_date": "10/01/2020",
+    "owner": "Self",
+    "ticker": "TSLA",
+    "asset_description": "Tesla Inc",
+    "asset_type": "Stock",
+    "type": "Purchase",
+    "amount": "$1,001 - $15,000",
+    "comment": "--",
+    "senator": "John Roe",
+    "ptr_link": "https://efdsearch.senate.gov/search/view/ptr/bbb-001/"
+  },
+  {
+    "transaction_date": "10/05/2020",
+    "owner": "Self",
+    "ticker": "US10Y",
+    "asset_description": "US Treasury 10Y Bond",
+    "asset_type": "Corporate Bond",
+    "type": "Purchase",
+    "amount": "$1,001 - $15,000",
+    "comment": "skip me",
+    "senator": "John Roe",
+    "ptr_link": "https://efdsearch.senate.gov/search/view/ptr/bbb-002/"
+  },
+  {
+    "transaction_date": "09/15/2020",
+    "owner": "Self",
+    "ticker": "BAD-DATE",
+    "asset_description": "Bad",
+    "asset_type": "Stock",
+    "type": "Purchase",
+    "amount": "$1,001 - $15,000",
+    "comment": "--",
+    "senator": "John Roe",
+    "ptr_link": "https://efdsearch.senate.gov/search/view/ptr/bbb-003/"
+  }
+]

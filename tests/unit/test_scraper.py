@@ -64,3 +64,49 @@ def test_ticker_extracted_when_plc_suffix_is_in_separate_span():
 
     assert trade is not None
     assert trade["ticker"] == "JHG"
+
+
+# ── Amount range parsing — needed by copier's min_amount filter ─────────────
+
+
+def test_parse_amount_range_K_suffix():
+    assert scraper._parse_amount_range("1K-15K") == (1_000, 15_000)
+    assert scraper._parse_amount_range("15K-50K") == (15_000, 50_000)
+
+
+def test_parse_amount_range_M_suffix():
+    assert scraper._parse_amount_range("500K-1M") == (500_000, 1_000_000)
+    assert scraper._parse_amount_range("1M-5M") == (1_000_000, 5_000_000)
+
+
+def test_parse_amount_range_with_dollar_signs_and_spaces():
+    assert scraper._parse_amount_range("$1K - $15K") == (1_000, 15_000)
+
+
+def test_parse_amount_range_unparseable_returns_zero_zero():
+    assert scraper._parse_amount_range("N/A") == (0, 0)
+    assert scraper._parse_amount_range("") == (0, 0)
+
+
+def test_parsed_trade_includes_numeric_amount_mid():
+    """The trade dict must surface numeric low/high/mid so the copier filter works."""
+    cells = [
+        '<span>John Boozman</span><span>Republican</span>',
+        '<span>Apple Inc</span><span>AAPL:US</span>',
+        '<span>10 Mar2026</span>',
+        '<span>05 Mar2026</span>',
+        '<span></span>',
+        '<span></span>',
+        '<span>buy</span>',
+        '<span>15K-50K</span>',
+        '<span></span>',
+        '<span></span>',
+    ]
+    html = "<a href=\"/trades/12345\"></a><table>" + "".join(f"<td>{c}</td>" for c in cells) + "</table>"
+    parsed = scraper._extract_cells(html)
+    trade = scraper._parse_row(parsed[:10], "12345")
+
+    assert trade is not None
+    assert trade["amount_low"] == 15_000
+    assert trade["amount_high"] == 50_000
+    assert trade["amount_mid"] == 32_500

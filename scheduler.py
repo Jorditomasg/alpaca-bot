@@ -25,6 +25,8 @@ import copy_trader.scraper as scraper
 import copy_trader.scorer  as scorer
 import copy_trader.copier  as copier
 import copy_trader.portfolio as portfolio
+import copy_trader.exits  as copy_exits
+import copy_trader.config as copy_config
 import wheel.state   as wheel_state_mod
 import wheel.engine  as wheel_engine
 import wheel.monitor as wheel_monitor
@@ -249,7 +251,17 @@ async def copy_task():
             await asyncio.sleep(INTERVAL)
             continue
 
-        new_trades = copier.new_trades_to_copy(trades, following, state["seen_trade_ids"])
+        # Per-position exit checks BEFORE entering new trades. Frees capital that
+        # rebalance would otherwise dilute across stale positions.
+        await _run_copy_exits(state)
+
+        today_iso = datetime.utcnow().strftime("%Y-%m-%d")
+        new_trades = copier.new_trades_to_copy(
+            trades, following, state["seen_trade_ids"],
+            today=today_iso,
+            freshness_days=copy_config.PUB_FRESHNESS_DAYS,
+            min_amount=copy_config.MIN_AMOUNT,
+        )
         if new_trades:
             try:
                 portfolio.execute_batch(new_trades, state)
@@ -267,6 +279,47 @@ async def copy_task():
 
         copy_state_mod.save(state)
         await asyncio.sleep(INTERVAL)
+
+
+async def _run_copy_exits(state: dict) -> None:
+    """Evaluate stop / trailing / max-holding exits on each cycle.
+
+    Fetches current prices for held positions, asks the exits module which to
+    close, and forwards each decision to the broker via portfolio.close_and_remove.
+    """
+    positions = state.get("positions") or {}
+    if not positions:
+        return
+
+    loop = asyncio.get_running_loop()
+    prices: dict[str, float] = {}
+    for ticker in list(positions.keys()):
+        try:
+            price = await loop.run_in_executor(None, shared_trader.get_latest_price, ticker)
+            prices[ticker] = price
+        except Exception as e:
+            print(f"[COPY] price fetch failed for {ticker}: {e}")
+
+    today_iso = datetime.utcnow().strftime("%Y-%m-%d")
+    decisions = copy_exits.evaluate(
+        positions, prices,
+        today=today_iso,
+        stop_loss_pct=copy_config.STOP_LOSS_PCT,
+        trail_arm_pct=copy_config.TRAIL_ARM_PCT,
+        trail_giveback_pct=copy_config.TRAIL_GIVEBACK_PCT,
+        max_holding_days=copy_config.MAX_HOLDING_DAYS,
+    )
+    for d in decisions:
+        print(f"[COPY] EXIT {d.ticker} | {d.reason}")
+        try:
+            await loop.run_in_executor(None, portfolio.close_and_remove, d.ticker, state)
+            await tg_notifier.notify_state(
+                "copy", "exit",
+                {"ticker": d.ticker, "reason": d.reason},
+            )
+        except Exception as e:
+            print(f"[COPY] EXIT {d.ticker} failed: {e}")
+            await tg_notifier.notify_error("copy_exits", f"{d.ticker}: {e}")
 
 
 # ── Wheel Strategy ──────────────────────────────────────────────────────────

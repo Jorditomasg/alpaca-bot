@@ -24,6 +24,9 @@ _HEADERS = {
 _PARTY_RE = re.compile(r"(Republican|Democrat|Independent|Libertarian)")
 _TICKER_RE = re.compile(r"([A-Z]{1,6}):[A-Z]{2,3}$")
 _DATE_RE = re.compile(r"(\d{1,2})\s+([A-Za-z]{3})(\d{4})")
+_AMOUNT_RE = re.compile(
+    r"\$?\s*(\d+(?:\.\d+)?)\s*([KkMm])\s*-\s*\$?\s*(\d+(?:\.\d+)?)\s*([KkMm])"
+)
 
 
 def fetch_trades(pages: int = 1) -> list[dict]:
@@ -115,6 +118,8 @@ def _parse_row(row: list[str], trade_id: str | None) -> dict | None:
     # Stable ID: use trade page ID if available, else hash
     tid = trade_id or hashlib.md5(f"{politician}{ticker}{tx_date}".encode()).hexdigest()[:12]
 
+    low, high = _parse_amount_range(amount_raw)
+
     return {
         "id": tid,
         "politician": politician,
@@ -122,9 +127,29 @@ def _parse_row(row: list[str], trade_id: str | None) -> dict | None:
         "type": side,
         "traded_date": tx_date,
         "pub_date": pub_date,
-        "amount_low": amount_raw,
-        "amount_high": amount_raw,
+        "amount_low": low,
+        "amount_high": high,
+        "amount_mid": (low + high) / 2,
+        "amount_raw": amount_raw,
     }
+
+
+def _parse_amount_range(raw: str) -> tuple[int, int]:
+    """Capitol Trades formats like '1K-15K', '$15K - $50K', '500K-1M'.
+    Returns (low_int, high_int) in dollars, or (0, 0) if unparseable.
+    """
+    if not raw:
+        return (0, 0)
+    m = _AMOUNT_RE.search(raw)
+    if not m:
+        return (0, 0)
+    lo_num, lo_unit, hi_num, hi_unit = m.group(1), m.group(2), m.group(3), m.group(4)
+    return (_to_dollars(lo_num, lo_unit), _to_dollars(hi_num, hi_unit))
+
+
+def _to_dollars(num: str, unit: str) -> int:
+    mult = 1_000_000 if unit.upper() == "M" else 1_000
+    return int(float(num) * mult)
 
 
 def _parse_date(raw: str) -> str:
