@@ -1,11 +1,19 @@
 """
-Manages capital across N active positions with equal notional allocation.
-Processes trades in batch to avoid wash-trade cascades.
+Executes copied trades with a fixed notional per new position — the same
+sizing model the backtest harness validated (backtest/strategy.py funds each
+politician buy with a fixed notional from cash and never resizes existing
+positions). Sells close the full position.
+
+The previous implementation rebalanced every position to buying_power/n on
+each batch. Buying power already excludes invested capital, so each new
+signal shrank the allocation target and sold slices of every existing
+position — the portfolio contracted toward zero invested. Equity-based fixed
+notional removes that feedback loop.
 
 Position metadata is stamped at open time so the exits module can evaluate
 stop/trailing/max-holding rules without an extra broker round-trip:
     positions[ticker] = {
-        "notional": <set by _rebalance>,
+        "notional": <dollars bought at open>,
         "entry_date": "YYYY-MM-DD" (UTC),
         "cost_basis": <fill price at open>,
         "high_watermark": <max close seen since entry>,
@@ -15,48 +23,100 @@ from datetime import datetime, timezone
 
 from shared import alpaca_client
 from shared import trader as shared_trader
-from alpaca.trading.requests import MarketOrderRequest, GetOrdersRequest
-from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
+import copy_trader.config as config
+from alpaca.trading.requests import GetOrdersRequest
+from alpaca.trading.enums import QueryOrderStatus
 
 
-def execute_batch(new_trades: list[dict], state: dict) -> None:
-    """Process all new trades at once: update positions then rebalance once."""
+def execute_batch(new_trades: list[dict], state: dict) -> list[dict]:
+    """Process new trades; return the subset that was actually handled.
+
+    Buys open a fixed-notional position (NOTIONAL_PCT % of account equity)
+    when buying power covers it. Sells close the held position (and count as
+    handled even when nothing is held — there is nothing left to retry).
+
+    A buy that cannot execute right now (no equity figure, insufficient
+    buying power, no price, order rejected) is NOT handled, so the caller
+    must not mark it seen — it gets retried while the filing stays fresh.
+    """
     positions = state["positions"]
-    capital = _get_buying_power(state)
-    state["total_capital"] = capital
-    changed = False
+    handled: list[dict] = []
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    notional = _entry_notional(state)
 
     for trade in new_trades:
         ticker = trade["ticker"]
         txn = trade["type"]
 
-        if txn == "buy" and ticker not in positions:
+        if txn == "buy":
+            if ticker in positions:
+                handled.append(trade)  # already open — nothing to do
+                continue
+            if notional is None:
+                continue  # equity unknown this cycle — retry later
+            bp = _buying_power()
+            if bp is None or bp < notional:
+                print(f"[PORTFOLIO] Skipping {ticker} — buying power "
+                      f"${bp if bp is not None else 0.0:,.2f} < notional ${notional:,.2f}")
+                continue
             fill_price = _safe_latest_price(ticker)
             if fill_price is None:
                 print(f"[PORTFOLIO] Skipping {ticker} — no entry price available")
                 continue
-            _stamp_open(positions, ticker, today=today, fill_price=fill_price)
-            changed = True
-        elif txn == "sell" and ticker in positions:
-            close_position(ticker, state)
-            del positions[ticker]
-            changed = True
+            try:
+                shared_trader.buy(ticker, notional=notional)
+            except Exception as e:
+                print(f"[PORTFOLIO] Buy failed {ticker}: {e}")
+                continue
+            _stamp_open(positions, ticker, today=today, fill_price=fill_price,
+                        notional=notional)
+            handled.append(trade)
+        elif txn == "sell":
+            if ticker in positions:
+                close_position(ticker, state)
+                positions.pop(ticker, None)
+            handled.append(trade)
 
-    if not changed:
-        return
-
-    state["positions"] = positions
-    if capital > 0:
-        _rebalance(positions, capital)
+    return handled
 
 
-def _stamp_open(positions: dict, ticker: str, today: str, fill_price: float) -> None:
+def _entry_notional(state: dict) -> float | None:
+    """Dollar size for a new position: NOTIONAL_PCT % of account equity.
+
+    Falls back to the last known equity on API failure; returns None when no
+    usable figure exists (callers skip buys and retry next cycle).
+    """
+    try:
+        equity = shared_trader.get_equity()
+        state["total_capital"] = equity
+    except Exception as e:
+        equity = state.get("total_capital", 0.0)
+        print(f"[PORTFOLIO] Could not fetch equity: {e} — "
+              f"using last known ${equity:,.2f}")
+    if not equity or equity <= 0:
+        return None
+    notional = round(equity * config.NOTIONAL_PCT / 100.0, 2)
+    # Alpaca rejects notional orders under $1.
+    return notional if notional >= 1.0 else None
+
+
+def _buying_power() -> float | None:
+    try:
+        client = alpaca_client.trading()
+        return float(client.get_account().buying_power)
+    except Exception as e:
+        print(f"[PORTFOLIO] Could not fetch buying power: {e}")
+        return None
+
+
+def _stamp_open(positions: dict, ticker: str, today: str, fill_price: float,
+                notional: float = 0.0) -> None:
     """Add a new position with full metadata. No-op if the ticker is already open."""
     if ticker in positions:
         return
     positions[ticker] = {
-        "notional": 0.0,
+        "notional": notional,
         "entry_date": today,
         "cost_basis": fill_price,
         "high_watermark": fill_price,
@@ -78,50 +138,6 @@ def _safe_latest_price(ticker: str) -> float | None:
     except Exception as e:
         print(f"[PORTFOLIO] get_latest_price({ticker}) failed: {e}")
         return None
-
-
-def _rebalance(positions: dict, capital: float) -> None:
-    n = len(positions)
-    if n == 0:
-        return
-
-    alloc = round(capital / n, 2)
-    client = alpaca_client.trading()
-
-    for sym, pos in positions.items():
-        delta = alloc - pos["notional"]
-        if abs(delta) < 1.0:
-            continue
-
-        side = OrderSide.BUY if delta > 0 else OrderSide.SELL
-
-        # Cancel any pending orders for this symbol to avoid wash trades
-        _cancel_pending(client, sym)
-
-        try:
-            client.submit_order(MarketOrderRequest(
-                symbol=sym,
-                notional=round(abs(delta), 2),
-                side=side,
-                time_in_force=TimeInForce.DAY,
-            ))
-            pos["notional"] = alloc
-            print(f"[PORTFOLIO] {side.value.upper()} ${abs(delta):.2f} {sym}")
-        except Exception as e:
-            print(f"[PORTFOLIO] Order failed {sym}: {e}")
-
-
-def _get_buying_power(state: dict) -> float:
-    try:
-        client = alpaca_client.trading()
-        acct = client.get_account()
-        bp = float(acct.buying_power)
-        print(f"[PORTFOLIO] Buying power: ${bp:,.2f}")
-        return bp
-    except Exception as e:
-        fallback = state.get("total_capital", 0.0)
-        print(f"[PORTFOLIO] Could not fetch buying power: {e} — using last known ${fallback:,.2f}")
-        return fallback
 
 
 def _cancel_pending(client, symbol: str) -> None:

@@ -41,3 +41,11 @@ TRAIL_GIVEBACK_PCT    = _f("COPY_TRAIL_GIVEBACK_PCT", 5.0)
 
 # After this many days of holding, the political signal is considered decayed.
 MAX_HOLDING_DAYS      = _i("COPY_MAX_HOLDING_DAYS", 180)
+
+# New-position size as % of account equity. 5% mirrors the validated backtest
+# sweep configuration (notional 5000 on 100000 starting cash).
+NOTIONAL_PCT          = _f("COPY_NOTIONAL_PCT", 5.0)
+
+# Capitol Trades pages to scrape per poll. Page 0 alone (~12 rows) misses
+# filings — including the followed politician's sells — on busy filing days.
+SCRAPE_PAGES          = _i("COPY_SCRAPE_PAGES", 3)

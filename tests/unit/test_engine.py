@@ -35,11 +35,22 @@ def _spread_state(stage: str = "IDLE", net_credit: float = 50.0, **kwargs) -> di
         "max_loss": 150.0,
         "spread_width": 2.0,
         "last_logged_insufficient_at": None,
+        "open_order_id": None,
+        "close_order_id": None,
+        "realized_pnl": 0.0,
     }
     if stage == "SPREAD_OPEN":
         base["contract_expiry"] = _EXPIRY_FUTURE
     base.update(kwargs)
     return base
+
+
+def _order_mock(status: str, filled_avg_price: str | None = None) -> MagicMock:
+    """Broker order object as returned by get_order_by_id."""
+    o = MagicMock()
+    o.status = status
+    o.filled_avg_price = filled_avg_price
+    return o
 
 
 def _csp_state(stage: str = "IDLE") -> dict:
@@ -178,15 +189,16 @@ def test_capital_guard_clears_on_recovery(mocker, capsys, monkeypatch):
     assert state["last_logged_insufficient_at"] is None
 
 
-# ── IDLE → SPREAD_OPEN ────────────────────────────────────────────────────────
+# ── IDLE → SPREAD_OPENING → SPREAD_OPEN ──────────────────────────────────────
 
-def test_idle_to_spread_open_happy_path(mocker, monkeypatch):
-    """IDLE → SPREAD_OPEN when capital is sufficient and a qualifying spread is found."""
+def test_idle_to_spread_opening_then_open_on_fill(mocker, monkeypatch):
+    """IDLE → SPREAD_OPENING on submit; credit booked only when the order fills."""
     monkeypatch.setenv("WHEEL_MIN_BUYING_POWER", "400")
     import wheel.engine as eng
 
     mock_client = MagicMock()
     mock_client.get_account.return_value = MagicMock(buying_power="1000")
+    mock_client.submit_order.return_value = MagicMock(id="oid-open-1")
     mocker.patch("shared.alpaca_client.trading", return_value=mock_client)
     mocker.patch.object(eng, "_get_stock_price", return_value=10.0)
     mocker.patch.object(eng, "_fetch_option_chain", return_value={
@@ -205,13 +217,60 @@ def test_idle_to_spread_open_happy_path(mocker, monkeypatch):
         "score": 0.33,
     })
 
-    state = _spread_state(stage="IDLE")
+    state = _spread_state(stage="IDLE", net_credit=0.0)
     result = eng.run_cycle(state)
 
-    assert result["stage"] == "SPREAD_OPEN"
+    # Submitted but NOT filled yet: no credit booked, position pending
+    assert result["stage"] == "SPREAD_OPENING"
     assert result["short_symbol"] == "SOFI260117P00009000"
-    assert result["net_credit"] == 50.0
+    assert result["open_order_id"] == "oid-open-1"
+    assert result["total_premium"] == 0.0
     mock_client.submit_order.assert_called_once()
+
+    # Fill confirmed at $0.48/share → credit booked from the actual fill
+    mock_client.get_order_by_id.return_value = _order_mock("filled", "0.48")
+    result = eng.run_cycle(result)
+
+    assert result["stage"] == "SPREAD_OPEN"
+    assert result["net_credit"] == pytest.approx(48.0)
+    assert result["total_premium"] == pytest.approx(48.0)
+    assert result["open_order_id"] is None
+
+
+def test_spread_opening_unfilled_order_resets_to_idle(mocker, monkeypatch):
+    """SPREAD_OPENING → IDLE when the open order expires unfilled — no phantom credit."""
+    monkeypatch.setenv("WHEEL_MIN_BUYING_POWER", "400")
+    import wheel.engine as eng
+
+    mock_client = MagicMock()
+    mock_client.get_order_by_id.return_value = _order_mock("expired")
+    mocker.patch("shared.alpaca_client.trading", return_value=mock_client)
+
+    state = _spread_state(stage="SPREAD_OPENING", net_credit=50.0,
+                          open_order_id="oid-open-1")
+    result = eng.run_cycle(state)
+
+    assert result["stage"] == "IDLE"
+    assert result["total_premium"] == 0.0
+    assert result["short_symbol"] is None
+    assert result["open_order_id"] is None
+
+
+def test_spread_opening_still_working_stays_pending(mocker, monkeypatch):
+    """SPREAD_OPENING stays pending while the order is live at the broker."""
+    monkeypatch.setenv("WHEEL_MIN_BUYING_POWER", "400")
+    import wheel.engine as eng
+
+    mock_client = MagicMock()
+    mock_client.get_order_by_id.return_value = _order_mock("new")
+    mocker.patch("shared.alpaca_client.trading", return_value=mock_client)
+
+    state = _spread_state(stage="SPREAD_OPENING", net_credit=50.0,
+                          open_order_id="oid-open-1")
+    result = eng.run_cycle(state)
+
+    assert result["stage"] == "SPREAD_OPENING"
+    assert result["total_premium"] == 0.0
 
 
 def test_idle_stays_when_no_spread_found(mocker, monkeypatch):
@@ -233,20 +292,21 @@ def test_idle_stays_when_no_spread_found(mocker, monkeypatch):
     mock_client.submit_order.assert_not_called()
 
 
-# ── SPREAD_OPEN → IDLE (profit-take) ─────────────────────────────────────────
+# ── SPREAD_OPEN → SPREAD_CLOSING → IDLE (profit-take) ────────────────────────
 
-def test_spread_open_to_idle_profit_take(mocker, monkeypatch):
-    """SPREAD_OPEN → IDLE when current spread cost ≤ 50% of net credit."""
+def test_spread_profit_take_closes_after_fill(mocker, monkeypatch):
+    """Profit-take submits a close order (SPREAD_CLOSING); P&L books on the fill."""
     monkeypatch.setenv("WHEEL_MIN_BUYING_POWER", "400")
     import wheel.engine as eng
 
     mock_client = MagicMock()
     mock_client.get_account.return_value = MagicMock(buying_power="1000")
+    mock_client.submit_order.return_value = MagicMock(id="oid-close-1")
     mocker.patch("shared.alpaca_client.trading", return_value=mock_client)
 
     # net_credit = 50.0 → per-share credit = 0.50
     # profit target at 50%: cost ≤ 0.50 * (1 - 0.50) = 0.25
-    # We'll say short_bid=0.15, long_ask=0.05 → spread_mid=0.10 ≤ 0.25 → trigger
+    # short_bid=0.15, long_ask=0.05 → spread_mid=0.10 ≤ 0.25 → trigger
     mocker.patch.object(eng, "_get_option_quote", side_effect=[
         {"bid": 0.15, "ask": 0.18},   # short quote
         {"bid": 0.04, "ask": 0.05},   # long quote
@@ -254,12 +314,46 @@ def test_spread_open_to_idle_profit_take(mocker, monkeypatch):
 
     state = _spread_state(stage="SPREAD_OPEN", net_credit=50.0)
     state["contract_expiry"] = _EXPIRY_FUTURE
+    state["total_premium"] = 50.0  # booked at open fill
     result = eng.run_cycle(state)
+
+    # Close submitted but not yet filled — spread is still tracked
+    assert result["stage"] == "SPREAD_CLOSING"
+    assert result["close_order_id"] == "oid-close-1"
+    assert result["cycles"] == 0
+    mock_client.submit_order.assert_called_once()
+
+    # Close fills at $0.10/share → realized = 50 - 10 = 40
+    mock_client.get_order_by_id.return_value = _order_mock("filled", "0.10")
+    result = eng.run_cycle(result)
 
     assert result["stage"] == "IDLE"
     assert result["cycles"] == 1
     assert result["short_symbol"] is None
-    mock_client.submit_order.assert_called_once()
+    assert result["realized_pnl"] == pytest.approx(40.0)
+    # total_premium replaced the optimistic credit with actual P&L: 50-50+40
+    assert result["total_premium"] == pytest.approx(40.0)
+
+
+def test_spread_closing_canceled_returns_to_open(mocker, monkeypatch):
+    """SPREAD_CLOSING → SPREAD_OPEN when the close order dies unfilled — the
+    spread is still on at the broker and must keep being managed."""
+    monkeypatch.setenv("WHEEL_MIN_BUYING_POWER", "400")
+    import wheel.engine as eng
+
+    mock_client = MagicMock()
+    mock_client.get_order_by_id.return_value = _order_mock("canceled")
+    mocker.patch("shared.alpaca_client.trading", return_value=mock_client)
+
+    state = _spread_state(stage="SPREAD_CLOSING", net_credit=50.0,
+                          close_order_id="oid-close-1", total_premium=50.0)
+    state["contract_expiry"] = _EXPIRY_FUTURE
+    result = eng.run_cycle(state)
+
+    assert result["stage"] == "SPREAD_OPEN"
+    assert result["close_order_id"] is None
+    assert result["cycles"] == 0
+    assert result["total_premium"] == pytest.approx(50.0)
 
 
 def test_spread_open_stays_when_mid_above_target(mocker, monkeypatch):
@@ -494,9 +588,8 @@ def test_capital_guard_does_not_block_spread_close(mocker, monkeypatch):
 
     result = eng.run_cycle(state)
 
-    # Close must have executed despite low BP
-    assert result["stage"] == "IDLE"
-    assert result["cycles"] == 1
+    # Close order must have been submitted despite low BP
+    assert result["stage"] == "SPREAD_CLOSING"
     mock_client.submit_order.assert_called_once()
 
 
@@ -592,6 +685,7 @@ def test_contract_expiry_cleared_after_close(mocker, monkeypatch):
 
     mock_client = MagicMock()
     mock_client.get_account.return_value = MagicMock(buying_power="1000")
+    mock_client.submit_order.return_value = MagicMock(id="oid-close-1")
     mocker.patch("shared.alpaca_client.trading", return_value=mock_client)
 
     # Trigger profit-take: mid=0.10 <= target=0.25 (net_credit=50, 50% default)
@@ -604,6 +698,9 @@ def test_contract_expiry_cleared_after_close(mocker, monkeypatch):
     state["contract_expiry"] = _EXPIRY_FUTURE
 
     result = eng.run_cycle(state)
+    # Confirm the close fill on the next cycle
+    mock_client.get_order_by_id.return_value = _order_mock("filled", "0.10")
+    result = eng.run_cycle(result)
 
     assert result["stage"] == "IDLE"
     # contract_expiry must be cleared — no stale expiry leaks into IDLE
@@ -717,8 +814,8 @@ def test_kill_switch_does_not_block_spread_close(mocker, monkeypatch, tmp_path):
     state["contract_expiry"] = _EXPIRY_FUTURE
     result = eng.run_cycle(state)
 
-    # Close went through despite halt
-    assert result["stage"] == "IDLE"
+    # Close order went through despite halt
+    assert result["stage"] == "SPREAD_CLOSING"
     mock_client.submit_order.assert_called_once()
 
 

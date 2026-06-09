@@ -17,13 +17,31 @@ def _state(
         "floor": floor if floor is not None else entry * 0.95,
         "trailing_active": False,
         "position_qty": 1.0,
-        "ladder_15_done": False,
-        "ladder_22_done": False,
-        "ladder_30_done": False,
-        "ladder_40_done": False,
         "atr": atr,
         "atr_multiplier": atr_multiplier,
     }
+
+
+# ── No averaging down — deep drops exit, never buy ──────────────────────────
+
+
+def test_deep_drop_below_floor_sells_everything():
+    """A price far below entry must trigger the floor exit immediately."""
+    state = _state(entry=400.0, floor=360.0)
+    actions = evaluate(340.0, state)  # -15% from entry, below the -10% floor
+    assert [a.type for a in actions] == ["sell"]
+    assert actions[0].qty == state["position_qty"]
+
+
+def test_evaluate_never_emits_buy_actions():
+    """The strategy never averages down: any price at or below the floor is an
+    exit, so a buy below it would be unreachable. Walk a crash from entry to
+    -40% and assert no buy ever appears."""
+    state = _state(entry=400.0, floor=360.0)
+    seen_types: set[str] = set()
+    for price in (390.0, 380.0, 370.0, 360.0, 340.0, 312.0, 280.0, 240.0):
+        seen_types.update(a.type for a in evaluate(price, state))
+    assert "buy" not in seen_types
 
 
 # ── Trigger activation precision ────────────────────────────────────────────

@@ -73,6 +73,8 @@ def load() -> dict:
         s.setdefault("spread_width", cfg.spread_width)
         s.setdefault("last_logged_insufficient_at", None)
         s.setdefault("realized_pnl", 0.0)
+        s.setdefault("open_order_id", None)
+        s.setdefault("close_order_id", None)
         # Ensure symbol comes from config (removes TSLA hardcode) for fresh files
         if "symbol" not in s:
             s["symbol"] = cfg.symbol
@@ -120,6 +122,9 @@ def load() -> dict:
         "net_credit": 0.0,
         "max_loss": 0.0,
         "spread_width": cfg.spread_width,
+        # In-flight order tracking (fill confirmation)
+        "open_order_id": None,
+        "close_order_id": None,
         # Capital guard
         "last_logged_insufficient_at": None,
         # Lifetime realized P&L accumulator (persists across cycles)

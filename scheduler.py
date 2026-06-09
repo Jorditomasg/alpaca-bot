@@ -91,8 +91,6 @@ async def trailing_task():
                 "position_qty": qty,
                 "floor": round(entry * 0.90, 2),
                 "trailing_active": False, "high_watermark": entry,
-                "ladder_15_done": False, "ladder_22_done": False,
-                "ladder_30_done": False, "ladder_40_done": False,
                 "atr": None, "atr_refreshed_at": None,
                 "atr_multiplier": ATR_MULTIPLIER,
             }
@@ -164,21 +162,9 @@ async def trailing_task():
             current["_trailing_active_notified"] = True
 
         for action in actions:
-            # Block ladder buys when kill switch is active. Exits always allowed.
-            if action.type == "buy" and _refresh_kill_switch():
-                print(f"[TRAILING] Kill switch active — skipping ladder buy ({action.reason})")
-                continue
             print(f"[TRAILING] {action.type.upper()} | {action.reason}")
             try:
-                if action.type == "buy":
-                    shared_trader.buy(symbol, notional=action.notional)
-                    added_qty = action.notional / price
-                    current["position_qty"] += round(added_qty, 4)
-                    await tg_notifier.notify_trade(
-                        strategy="trailing", side="buy", symbol=symbol,
-                        notional=action.notional, price=price, reason=action.reason,
-                    )
-                elif action.type == "sell":
+                if action.type == "sell":
                     # Use close_position (atomic full exit) — avoids the
                     # fractional drift between locally-tracked qty and the
                     # broker's actual qty after a series of notional buys.
@@ -222,6 +208,12 @@ async def copy_task():
         state = copy_state_mod.load()
         now_str = datetime.utcnow().isoformat()
 
+        # Exit checks run FIRST and never depend on the scraper: stop-loss and
+        # trailing exits only need broker prices, and must keep firing even if
+        # capitoltrades.com is down for days.
+        await _run_copy_exits(state)
+        copy_state_mod.save(state)
+
         last_scored = state.get("last_scored")
         needs_rescore = (
             last_scored is None or
@@ -231,7 +223,9 @@ async def copy_task():
         print("[COPY] Fetching Capitol Trades...")
         try:
             loop = asyncio.get_running_loop()
-            trades = await loop.run_in_executor(None, scraper.fetch_trades)
+            trades = await loop.run_in_executor(
+                None, scraper.fetch_trades, copy_config.SCRAPE_PAGES
+            )
             consec_scrape_fail = 0
         except Exception as e:
             consec_scrape_fail += 1
@@ -263,10 +257,6 @@ async def copy_task():
             await asyncio.sleep(INTERVAL)
             continue
 
-        # Per-position exit checks BEFORE entering new trades. Frees capital that
-        # rebalance would otherwise dilute across stale positions.
-        await _run_copy_exits(state)
-
         today_iso = datetime.utcnow().strftime("%Y-%m-%d")
         new_trades = copier.new_trades_to_copy(
             trades, following, state["seen_trade_ids"],
@@ -275,18 +265,22 @@ async def copy_task():
             min_amount=copy_config.MIN_AMOUNT,
         )
         if new_trades:
+            handled: list[dict] = []
             try:
-                portfolio.execute_batch(new_trades, state)
-                tickers = ", ".join(t["ticker"] for t in new_trades[:5])
-                more = "" if len(new_trades) <= 5 else f" (+{len(new_trades)-5} more)"
-                await tg_client.send_message(
-                    f"<b>[COPY]</b> Executed {len(new_trades)} trades: "
-                    f"{html_escape(tickers)}{html_escape(more)}"
-                )
+                handled = portfolio.execute_batch(new_trades, state)
+                if handled:
+                    tickers = ", ".join(t["ticker"] for t in handled[:5])
+                    more = "" if len(handled) <= 5 else f" (+{len(handled)-5} more)"
+                    await tg_client.send_message(
+                        f"<b>[COPY]</b> Executed {len(handled)} trades: "
+                        f"{html_escape(tickers)}{html_escape(more)}"
+                    )
             except Exception as e:
                 print(f"[COPY] Batch execution failed: {e}")
                 await tg_notifier.notify_error("copy_task", str(e))
-            for t in new_trades:
+            # Only handled trades become seen — failed/skipped ones must be
+            # retried on the next poll while the filing is still fresh.
+            for t in handled:
                 state["seen_trade_ids"].append(t["id"])
 
         copy_state_mod.save(state)
@@ -361,7 +355,9 @@ async def wheel_task():
                     "long_strike": state.get("long_strike", 0.0),
                     "credit": state.get("net_credit", 0.0),
                 })
-            if prev_stage == "SPREAD_OPEN" and new_stage == "IDLE":
+            # Closes land on IDLE either from SPREAD_OPEN (expiry) or from
+            # SPREAD_CLOSING (fill-confirmed profit-take).
+            if prev_stage in ("SPREAD_OPEN", "SPREAD_CLOSING") and new_stage == "IDLE":
                 pnl = state.get("realized_pnl", 0.0)
                 credit = state.get("net_credit", 0.0) or 1.0
                 pct = (pnl / credit * 100) if credit else 0.0
@@ -462,6 +458,4 @@ async def _build_daily_summary(date_str: str) -> dict | None:
 
 def _print_trailing_summary(s: dict):
     e = s["entry_price"]
-    print(f"[TRAILING] Entry=${e:.2f} | Floor=${s['floor']:.2f} | "
-          f"Ladder: -15%=${e*0.85:.2f} -22%=${e*0.78:.2f} "
-          f"-30%=${e*0.70:.2f} -40%=${e*0.60:.2f}")
+    print(f"[TRAILING] Entry=${e:.2f} | Floor=${s['floor']:.2f}")

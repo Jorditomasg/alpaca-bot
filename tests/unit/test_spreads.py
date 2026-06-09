@@ -1,5 +1,6 @@
 """Unit tests for wheel/spreads.py — selection, scoring, and order construction."""
 import pytest
+from datetime import date, timedelta
 from alpaca.trading.enums import OrderClass, PositionIntent, OrderSide
 from wheel.spreads import best_bull_put_spread, build_open_order, build_close_order, spread_mid_price
 from wheel.config import get_config
@@ -14,7 +15,8 @@ _GOOD_SHORT_BID  = 0.60
 _GOOD_SHORT_ASK  = 0.62
 _GOOD_LONG_BID   = 0.10
 _GOOD_LONG_ASK   = 0.12
-_EXPIRY_WITHIN   = "2026-05-29"  # ~21 DTE from 2026-05-08 (within 14-28 DTE window)
+# Dynamic so the suite never rots: 21 DTE always sits inside the 14-28 window.
+_EXPIRY_WITHIN   = str(date.today() + timedelta(days=21))
 
 
 def _make_chain(
@@ -210,7 +212,7 @@ def test_empty_chain_returns_none(default_cfg):
 
 def test_no_contracts_in_dte_range_returns_none(default_cfg):
     # Put expiry 1 day from now → outside 14-28 DTE window
-    chain = _make_chain(expiry="2026-05-09")  # 1 day from 2026-05-08
+    chain = _make_chain(expiry=str(date.today() + timedelta(days=1)))  # 1 DTE — below window
     assert best_bull_put_spread("SOFI", 10.0, chain, default_cfg) is None
 
 

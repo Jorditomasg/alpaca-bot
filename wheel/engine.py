@@ -15,10 +15,19 @@ CSP state transitions:
   CALL_OPEN   → CALL_OPEN  : call expired worthless → sell new call
 
 Spread state transitions (bull_put_spread):
-  IDLE        → SPREAD_OPEN : sell bull put spread (defined-risk; no assignment possible)
-  SPREAD_OPEN → IDLE        : profit-take at 50% of net credit
-  SPREAD_OPEN → IDLE        : expiry worthless (full credit kept)
-  SPREAD_OPEN → IDLE        : max-loss at expiry (underlying < long strike)
+  IDLE           → SPREAD_OPENING : open order submitted (limit, DAY)
+  SPREAD_OPENING → SPREAD_OPEN    : open order filled — credit booked here
+  SPREAD_OPENING → IDLE           : open order canceled/expired/rejected
+  SPREAD_OPEN    → SPREAD_CLOSING : profit-take close order submitted
+  SPREAD_CLOSING → IDLE           : close order filled — realized P&L booked
+  SPREAD_CLOSING → SPREAD_OPEN    : close order canceled/expired — retry later
+  SPREAD_OPEN    → IDLE           : expiry worthless (full credit kept)
+  SPREAD_OPEN    → IDLE           : max-loss at expiry (underlying < long strike)
+
+Credit and P&L are booked only on CONFIRMED fills (order status polled by id).
+Booking at submit time produced phantom credit when a DAY limit order never
+filled, and the profit-take path used to forget the spread entirely while its
+close order was still working at the broker.
 """
 from __future__ import annotations
 from datetime import date
@@ -75,10 +84,16 @@ def _run_spread_cycle(state: dict) -> dict:
         if _capital_guard(state, cfg.min_buying_power, "spread"):
             return state
         return _open_spread(state, cfg)
+    elif stage == "SPREAD_OPENING":
+        # In-flight open order — no guards, only status polling.
+        return _check_spread_opening(state)
     elif stage == "SPREAD_OPEN":
         # No capital guard here — closing a spread releases collateral and must
         # never be blocked by an insufficient buying-power check.
         return _check_spread(state, cfg)
+    elif stage == "SPREAD_CLOSING":
+        # In-flight close order — exits are never gated.
+        return _check_spread_closing(state)
 
     return state
 
@@ -108,13 +123,15 @@ def _open_spread(state: dict, cfg) -> dict:
     # Submit BEFORE mutating state so a rejected/failed order leaves state IDLE.
     client = alpaca_client.trading()
     try:
-        client.submit_order(order)
+        submitted = client.submit_order(order)
     except Exception as e:
         print(f"[WHEEL] Spread order failed: {e}")
         return state  # state unchanged — still IDLE
 
-    # Order accepted — commit state changes only after confirmed submission
-    state["stage"] = "SPREAD_OPEN"
+    # Order accepted — track the legs, but book NO credit until the fill is
+    # confirmed (_check_spread_opening). A DAY limit order may never fill.
+    state["stage"] = "SPREAD_OPENING"
+    state["open_order_id"] = str(submitted.id)
     state["short_symbol"] = candidate["short_symbol"]
     state["short_strike"] = candidate["short_strike"]
     state["long_symbol"] = candidate["long_symbol"]
@@ -123,13 +140,96 @@ def _open_spread(state: dict, cfg) -> dict:
     state["net_credit"] = candidate["net_credit"]
     state["max_loss"] = candidate["max_loss"]
     state["spread_width"] = candidate["width"]
-    state["premium_received"] = candidate["net_credit"]
-    state["total_premium"] += candidate["net_credit"]
     print(
-        f"[WHEEL] SPREAD opened: {candidate['short_symbol']}/{candidate['long_symbol']} "
-        f"| credit=${candidate['net_credit']:.2f} | score={candidate['score']:.2f}"
+        f"[WHEEL] SPREAD open submitted: {candidate['short_symbol']}/{candidate['long_symbol']} "
+        f"| limit credit=${candidate['net_credit']:.2f} | score={candidate['score']:.2f} "
+        f"| order={submitted.id}"
     )
     return state
+
+
+def _check_spread_opening(state: dict) -> dict:
+    """Poll the in-flight open order; book the credit only on a confirmed fill."""
+    order_id = state.get("open_order_id")
+    if not order_id:
+        print("[WHEEL] SPREAD_OPENING without an order id — resetting to IDLE")
+        return _reset_spread_fields(state)
+
+    status, filled_price = _order_status(order_id)
+    if status is None:
+        return state  # API hiccup — poll again next cycle
+
+    if status == "filled":
+        if filled_price is not None and filled_price > 0:
+            # Replace the limit estimate with the actual net credit per share.
+            state["net_credit"] = round(filled_price * 100, 2)
+            state["max_loss"] = round(
+                state.get("spread_width", 0.0) * 100 - state["net_credit"], 2
+            )
+        credit = state.get("net_credit", 0.0)
+        state["premium_received"] = credit
+        state["total_premium"] += credit
+        state["open_order_id"] = None
+        state["stage"] = "SPREAD_OPEN"
+        print(f"[WHEEL] SPREAD open FILLED: credit=${credit:.2f}")
+        return state
+
+    if status in _TERMINAL_UNFILLED:
+        print(f"[WHEEL] SPREAD open order {status} — no position, back to IDLE")
+        return _reset_spread_fields(state)
+
+    return state  # still working (new/accepted/partially_filled)
+
+
+def _check_spread_closing(state: dict) -> dict:
+    """Poll the in-flight close order; book realized P&L only on a confirmed fill."""
+    order_id = state.get("close_order_id")
+    if not order_id:
+        print("[WHEEL] SPREAD_CLOSING without an order id — spread still open")
+        state["stage"] = "SPREAD_OPEN"
+        return state
+
+    status, filled_price = _order_status(order_id)
+    if status is None:
+        return state
+
+    if status == "filled":
+        net_credit = state.get("net_credit", 0.0)
+        debit = round(filled_price * 100, 2) if filled_price else 0.0
+        realized = round(net_credit - debit, 2)
+        # Credit was booked at open fill; replace it with the actual P&L.
+        state["total_premium"] += realized - net_credit
+        state["realized_pnl"] = state.get("realized_pnl", 0.0) + realized
+        state["cycles"] += 1
+        print(f"[WHEEL] SPREAD close FILLED: debit=${debit:.2f} | realized=${realized:.2f}")
+        return _reset_spread_fields(state)
+
+    if status in _TERMINAL_UNFILLED:
+        print(f"[WHEEL] SPREAD close order {status} — spread still open, will retry")
+        state["close_order_id"] = None
+        state["stage"] = "SPREAD_OPEN"
+        return state
+
+    return state
+
+
+_TERMINAL_UNFILLED = {"canceled", "cancelled", "expired", "rejected", "stopped"}
+
+
+def _order_status(order_id: str) -> tuple[str | None, float | None]:
+    """Return (normalized_status, filled_avg_price) for an order, (None, None) on failure."""
+    try:
+        order = alpaca_client.trading().get_order_by_id(order_id)
+    except Exception as e:
+        print(f"[WHEEL] Order status fetch failed {order_id}: {e}")
+        return None, None
+    status = str(getattr(order, "status", "")).split(".")[-1].strip().lower()
+    raw_price = getattr(order, "filled_avg_price", None)
+    try:
+        filled_price = float(raw_price) if raw_price is not None else None
+    except (TypeError, ValueError):
+        filled_price = None
+    return status, filled_price
 
 
 def _check_spread(state: dict, cfg) -> dict:
@@ -211,15 +311,18 @@ def _check_spread(state: dict, cfg) -> dict:
             )
             client = alpaca_client.trading()
             try:
-                client.submit_order(close_order)
-                print(
-                    f"[WHEEL] SPREAD profit-take: cost=${current_cost:.2f} ≤ "
-                    f"target=${profit_target_per_share:.2f} → closing"
-                )
-                state["cycles"] += 1
-                return _reset_spread_fields(state)
+                submitted = client.submit_order(close_order)
             except Exception as e:
                 print(f"[WHEEL] Spread close order failed: {e}")
+                return state
+            # Track the working close order; P&L and cycle count are booked
+            # only when _check_spread_closing confirms the fill.
+            state["stage"] = "SPREAD_CLOSING"
+            state["close_order_id"] = str(submitted.id)
+            print(
+                f"[WHEEL] SPREAD profit-take submitted: cost=${current_cost:.2f} ≤ "
+                f"target=${profit_target_per_share:.2f} | order={submitted.id}"
+            )
 
     return state
 
@@ -234,6 +337,8 @@ def _reset_spread_fields(state: dict) -> dict:
     state["max_loss"] = 0.0
     state["contract_expiry"] = None
     state["premium_received"] = 0.0
+    state["open_order_id"] = None
+    state["close_order_id"] = None
     return state
 
 

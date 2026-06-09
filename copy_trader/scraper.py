@@ -1,7 +1,9 @@
 """
 Capitol Trades HTML scraper.
 Parses the trades table directly from www.capitoltrades.com/trades.
-No API key required. Each page yields ~12 trades (SSR, page 0 only).
+No API key required. Each page yields ~12 trades (SSR); fetch_trades walks
+`pages` pages and dedupes by trade id, degrading gracefully when a page
+fails (whatever was collected so far is returned, freshest first).
 """
 import re
 import time
@@ -31,31 +33,38 @@ _AMOUNT_RE = re.compile(
 
 def fetch_trades(pages: int = 1) -> list[dict]:
     trades: list[dict] = []
+    seen_ids: set[str] = set()
     with httpx.Client(headers=_HEADERS, timeout=20, follow_redirects=True) as client:
-        html = _get_html(client)
-        if html is None:
-            print("[SCRAPER] Failed to fetch Capitol Trades page")
-            return trades
+        for page in range(1, max(1, pages) + 1):
+            html = _get_html(client, page=page)
+            if html is None:
+                print(f"[SCRAPER] Failed to fetch Capitol Trades page {page} "
+                      f"— returning {len(trades)} trades collected so far")
+                break
 
-        ids = _extract_trade_ids(html)
-        cells = _extract_cells(html)
+            ids = _extract_trade_ids(html)
+            cells = _extract_cells(html)
+            rows = [cells[i:i+10] for i in range(0, len(cells) - 9, 10)]
 
-        rows = [cells[i:i+10] for i in range(0, len(cells) - 9, 10)]
-        print(f"[SCRAPER] Parsed {len(rows)} trades from Capitol Trades")
+            for i, row in enumerate(rows):
+                t = _parse_row(row, ids[i] if i < len(ids) else None)
+                if t and t["id"] not in seen_ids:
+                    seen_ids.add(t["id"])
+                    trades.append(t)
 
-        for i, row in enumerate(rows):
-            t = _parse_row(row, ids[i] if i < len(ids) else None)
-            if t:
-                trades.append(t)
+            if page < pages:
+                time.sleep(1)  # politeness delay between page requests
 
+    print(f"[SCRAPER] Parsed {len(trades)} trades from Capitol Trades")
     return trades
 
 
-def _get_html(client: httpx.Client, retries: int = 3) -> str | None:
+def _get_html(client: httpx.Client, page: int = 1, retries: int = 3) -> str | None:
+    url = f"{_BASE}/trades" if page <= 1 else f"{_BASE}/trades?page={page}"
     delay = 5
     for attempt in range(retries):
         try:
-            r = client.get(f"{_BASE}/trades")
+            r = client.get(url)
             r.raise_for_status()
             return r.text
         except httpx.HTTPStatusError as e:

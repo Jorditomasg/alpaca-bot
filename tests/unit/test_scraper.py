@@ -1,5 +1,70 @@
-"""Unit tests for copy_trader/scraper.py — HTML parsing edge cases."""
+"""Unit tests for copy_trader/scraper.py — HTML parsing edge cases + pagination."""
 import copy_trader.scraper as scraper
+
+
+# ── Pagination ───────────────────────────────────────────────────────────────
+
+
+def _page_html(trade_ids: list[str]) -> str:
+    """Minimal page: one anchor + one 10-cell row per trade id."""
+    rows = []
+    anchors = []
+    for tid in trade_ids:
+        anchors.append(f'<a href="/trades/{tid}"></a>')
+        cells = [
+            '<span>John Boozman</span><span>Republican</span>',
+            '<span>Apple Inc</span><span>AAPL:US</span>',
+            '<span>10 Mar2026</span>',
+            '<span>05 Mar2026</span>',
+            '<span></span>', '<span></span>',
+            '<span>buy</span>',
+            '<span>15K-50K</span>',
+            '<span></span>', '<span></span>',
+        ]
+        rows.append("".join(f"<td>{c}</td>" for c in cells))
+    return "".join(anchors) + "<table>" + "".join(rows) + "</table>"
+
+
+def test_fetch_trades_walks_multiple_pages_and_dedupes(monkeypatch):
+    """fetch_trades(pages=2) must merge both pages, deduping overlapping ids."""
+    pages = {1: _page_html(["111", "222"]), 2: _page_html(["222", "333"])}
+    monkeypatch.setattr(
+        scraper, "_get_html",
+        lambda client, page=1, retries=3: pages.get(page),
+    )
+    monkeypatch.setattr(scraper.time, "sleep", lambda *_: None)
+
+    trades = scraper.fetch_trades(pages=2)
+
+    assert [t["id"] for t in trades] == ["111", "222", "333"]
+
+
+def test_fetch_trades_returns_collected_when_a_page_fails(monkeypatch):
+    """A failed page must not discard what earlier pages already produced."""
+    pages = {1: _page_html(["111", "222"]), 2: None}
+    monkeypatch.setattr(
+        scraper, "_get_html",
+        lambda client, page=1, retries=3: pages.get(page),
+    )
+    monkeypatch.setattr(scraper.time, "sleep", lambda *_: None)
+
+    trades = scraper.fetch_trades(pages=3)
+
+    assert [t["id"] for t in trades] == ["111", "222"]
+
+
+def test_fetch_trades_default_fetches_single_page(monkeypatch):
+    requested: list[int] = []
+
+    def fake_get_html(client, page=1, retries=3):
+        requested.append(page)
+        return _page_html(["111"])
+
+    monkeypatch.setattr(scraper, "_get_html", fake_get_html)
+
+    scraper.fetch_trades()
+
+    assert requested == [1]
 
 
 # ── Bug 1 regression: tag-stripping must not glue brand suffix to ticker ────
