@@ -57,7 +57,7 @@ def run(
         # Filings published today
         new_filings = by_pub.get(date_iso, [])
         if new_filings:
-            for action in strategy.on_pub_date(date_iso, new_filings):
+            for action in _on_pub_date(strategy, date_iso, new_filings, portfolio, current_prices):
                 fill = prices.get_close_on(action.ticker, date_iso)
                 if fill is None or fill <= 0:
                     continue
@@ -71,6 +71,23 @@ def run(
         result.equity_curve.append((date_iso, eq))
 
     return result
+
+
+def _on_pub_date(strategy, date_iso, new_filings, portfolio, current_prices):
+    """Call on_pub_date, passing portfolio/marks only to strategies that accept them.
+
+    Baseline/Improved have signature (date, new_filings, portfolio=None) and
+    ignore the extra arg; EquityFractionStrategy also takes marks. Inspect the
+    signature so older strategies keep working unchanged.
+    """
+    import inspect
+    params = inspect.signature(strategy.on_pub_date).parameters
+    kwargs = {}
+    if "portfolio" in params:
+        kwargs["portfolio"] = portfolio
+    if "marks" in params:
+        kwargs["marks"] = current_prices
+    return strategy.on_pub_date(date_iso, new_filings, **kwargs)
 
 
 def _business_days(start_iso: str, end_iso: str):

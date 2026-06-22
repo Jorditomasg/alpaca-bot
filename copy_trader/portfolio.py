@@ -31,19 +31,30 @@ from alpaca.trading.enums import QueryOrderStatus
 def execute_batch(new_trades: list[dict], state: dict) -> list[dict]:
     """Process new trades; return the subset that was actually handled.
 
-    Buys open a fixed-notional position (NOTIONAL_PCT % of account equity)
-    when buying power covers it. Sells close the held position (and count as
-    handled even when nothing is held — there is nothing left to retry).
+    Buys open a position sized at NOTIONAL_PCT % of account equity, subject to
+    two concentration controls (both validated in the 2018-2020 sweep):
+      - MAX_POSITIONS    : never hold more than N names at once
+      - MAX_INVESTED_PCT : never deploy more than this % of equity (dry powder)
+    Sells close the held position (and count as handled even when nothing is
+    held — there is nothing left to retry), and are NEVER blocked by the caps.
 
-    A buy that cannot execute right now (no equity figure, insufficient
-    buying power, no price, order rejected) is NOT handled, so the caller
-    must not mark it seen — it gets retried while the filing stays fresh.
+    A buy that cannot execute right now (no equity figure, insufficient buying
+    power, a cap reached, no price, order rejected) is NOT handled, so the
+    caller must not mark it seen — it gets retried while the filing stays fresh.
     """
     positions = state["positions"]
     handled: list[dict] = []
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     notional = _entry_notional(state)
+    equity = state.get("total_capital", 0.0)
+    bp = _buying_power()
+    # Deployment room left under the equity ceiling. invested ≈ equity - cash,
+    # and buying power is the cash proxy (exact on a cash account).
+    deploy_room = None
+    if equity and equity > 0 and bp is not None:
+        invested = max(0.0, equity - bp)
+        deploy_room = equity * config.MAX_INVESTED_PCT / 100.0 - invested
 
     for trade in new_trades:
         ticker = trade["ticker"]
@@ -55,7 +66,15 @@ def execute_batch(new_trades: list[dict], state: dict) -> list[dict]:
                 continue
             if notional is None:
                 continue  # equity unknown this cycle — retry later
-            bp = _buying_power()
+            if len(positions) >= config.MAX_POSITIONS:
+                print(f"[PORTFOLIO] Skipping {ticker} — at position cap "
+                      f"({config.MAX_POSITIONS})")
+                continue
+            if deploy_room is not None and notional > deploy_room:
+                print(f"[PORTFOLIO] Skipping {ticker} — deployment ceiling "
+                      f"{config.MAX_INVESTED_PCT:.0f}% reached "
+                      f"(room ${deploy_room:,.2f} < notional ${notional:,.2f})")
+                continue
             if bp is None or bp < notional:
                 print(f"[PORTFOLIO] Skipping {ticker} — buying power "
                       f"${bp if bp is not None else 0.0:,.2f} < notional ${notional:,.2f}")
@@ -71,6 +90,11 @@ def execute_batch(new_trades: list[dict], state: dict) -> list[dict]:
                 continue
             _stamp_open(positions, ticker, today=today, fill_price=fill_price,
                         notional=notional)
+            # Account for this fill so later buys in the same batch respect both
+            # the cash balance and the deployment ceiling.
+            bp -= notional
+            if deploy_room is not None:
+                deploy_room -= notional
             handled.append(trade)
         elif txn == "sell":
             if ticker in positions:

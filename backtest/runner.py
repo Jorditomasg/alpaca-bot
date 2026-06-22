@@ -46,6 +46,14 @@ def main() -> int:
     parser.add_argument("--trail-arm", type=float, default=8.0)
     parser.add_argument("--trail-giveback", type=float, default=5.0)
     parser.add_argument("--max-holding", type=int, default=90)
+    parser.add_argument("--sizing", choices=["fixed", "fraction"], default="fixed",
+                        help="Improved variant sizing: fixed notional or equity-fraction")
+    parser.add_argument("--position-pct", type=float, default=0.05,
+                        help="fraction sizing: position size as fraction of equity")
+    parser.add_argument("--max-invested-pct", type=float, default=0.80,
+                        help="fraction sizing: max fraction of equity deployed")
+    parser.add_argument("--max-positions", type=int, default=8,
+                        help="fraction sizing: max concurrent open positions")
     args = parser.parse_args()
 
     load_dotenv(_REPO / ".env")
@@ -85,8 +93,9 @@ def main() -> int:
         r_base, [t for t in r_base.portfolio.trades_log if t["side"] == "sell"]
     )
 
-    print("[BT] Running IMPROVED …")
-    improved = bt_strategy.ImprovedStrategy(
+    label = "IMPROVED" if args.sizing == "fixed" else "IMPROVED (equity-fraction)"
+    print(f"[BT] Running {label} …")
+    common = dict(
         starting_cash=args.cash,
         notional_per_trade=args.notional,
         pub_freshness_days=args.freshness_days,
@@ -96,6 +105,15 @@ def main() -> int:
         trail_giveback_pct=args.trail_giveback,
         max_holding_days=args.max_holding,
     )
+    if args.sizing == "fraction":
+        improved = bt_strategy.EquityFractionStrategy(
+            **common,
+            position_pct=args.position_pct,
+            max_invested_pct=args.max_invested_pct,
+            max_positions=args.max_positions,
+        )
+    else:
+        improved = bt_strategy.ImprovedStrategy(**common)
     improved.set_following(politician)
     r_imp = bt_engine.run(relevant, fetcher, improved, args.start, args.end)
     s_imp = bt_metrics.summarize(

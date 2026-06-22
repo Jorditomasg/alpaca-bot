@@ -38,7 +38,10 @@ class BaselineStrategy:
     def set_following(self, politician: str) -> None:
         self._following = politician
 
-    def on_pub_date(self, date: str, new_filings: list[dict]) -> list[Action]:
+    def on_pub_date(self, date: str, new_filings: list[dict],
+                    portfolio=None) -> list[Action]:
+        # portfolio is accepted for a uniform strategy interface; baseline
+        # ignores it (fixed notional, no equity-aware sizing).
         if not self._following:
             return []
         actions: list[Action] = []
@@ -90,7 +93,10 @@ class ImprovedStrategy:
     def set_following(self, politician: str) -> None:
         self._following = politician
 
-    def on_pub_date(self, date: str, new_filings: list[dict]) -> list[Action]:
+    def on_pub_date(self, date: str, new_filings: list[dict],
+                    portfolio=None) -> list[Action]:
+        # portfolio accepted for interface uniformity; Improved uses fixed
+        # notional, so it is ignored here (EquityFractionStrategy uses it).
         if not self._following:
             return []
         today = datetime.strptime(date, "%Y-%m-%d")
@@ -155,3 +161,70 @@ class ImprovedStrategy:
                 actions.append(Action(kind="sell", ticker=ticker, reason="signal_expired"))
 
         return actions
+
+
+# ── Equity-fraction (production sizing) ──────────────────────────────────────
+
+
+class EquityFractionStrategy(ImprovedStrategy):
+    """Improved signal/exit logic, but positions sized as a fraction of LIVE
+    equity instead of a fixed dollar notional, with two concentration caps.
+
+    This mirrors copy_trader/portfolio.py in production:
+      - position_pct      : each buy targets this fraction of current equity
+      - max_positions     : never hold more than N names at once
+      - max_invested_pct  : never deploy more than this fraction of equity
+                            (notional is clamped to the remaining room; a buy
+                            with no room left is dropped)
+
+    Fixed notional left most of the capital idle for normal-activity
+    politicians (validated: ~2-7% deployed) while letting a hyperactive one
+    over-concentrate. Equity-fraction + caps deploys capital and compounds the
+    base, while the position cap is what keeps drawdown within tolerance.
+    """
+
+    name = "equity_fraction"
+
+    def __init__(self, *args, position_pct: float = 0.05,
+                 max_invested_pct: float = 0.80, max_positions: int = 8,
+                 **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.position_pct = position_pct
+        self.max_invested_pct = max_invested_pct
+        self.max_positions = max_positions
+
+    def on_pub_date(self, date: str, new_filings: list[dict],
+                    portfolio=None, marks: dict[str, float] | None = None) -> list[Action]:
+        # Reuse parent for filtering (freshness/min-amount/follow) and sells;
+        # only buy sizing differs.
+        base_actions = super().on_pub_date(date, new_filings)
+        if portfolio is None:
+            return base_actions
+
+        # Mark-to-market equity when the engine supplies held-position prices;
+        # falls back to cost-basis equity otherwise.
+        equity = portfolio.equity(marks or {})
+        invested = equity - portfolio.cash
+        deploy_room = self.max_invested_pct * equity - invested
+        held = set(portfolio.positions.keys())
+
+        out: list[Action] = []
+        for a in base_actions:
+            if a.kind != "buy":
+                out.append(a)
+                continue
+            if a.ticker in held:
+                continue  # already open — engine would no-op anyway
+            if len(held) >= self.max_positions:
+                continue
+            if deploy_room <= 0:
+                continue
+            notional = min(self.position_pct * equity, deploy_room)
+            if notional < 1.0:
+                continue
+            out.append(Action(kind="buy", ticker=a.ticker,
+                              notional=round(notional, 2), reason=a.reason))
+            # Reserve against caps for the rest of this batch.
+            held.add(a.ticker)
+            deploy_room -= notional
+        return out

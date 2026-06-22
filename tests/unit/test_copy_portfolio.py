@@ -54,6 +54,103 @@ def test_buy_not_handled_when_buying_power_insufficient(mocker, monkeypatch):
     assert state["positions"] == {}
 
 
+# ── Concentration controls: max positions + deployment ceiling ───────────────
+
+
+def _positions(n: int) -> dict:
+    """n filler open positions so count-based caps can be exercised."""
+    return {
+        f"SYM{i}": {"notional": 50.0, "entry_date": "2026-05-01",
+                    "cost_basis": 10.0, "high_watermark": 10.0}
+        for i in range(n)
+    }
+
+
+def test_buy_skipped_at_max_positions(mocker, monkeypatch):
+    """At the position cap, a new buy is NOT opened and NOT handled (retry later)."""
+    monkeypatch.setattr(portfolio.config, "NOTIONAL_PCT", 5.0)
+    monkeypatch.setattr(portfolio.config, "MAX_POSITIONS", 8)
+    monkeypatch.setattr(portfolio.config, "MAX_INVESTED_PCT", 80.0)
+    # Plenty of buying power and deployment room — only the count cap should bind.
+    _, buy = _mock_broker(mocker, equity=1000.0, buying_power="900")
+    state = {"positions": _positions(8)}
+
+    handled = portfolio.execute_batch([_buy("AAPL")], state)
+
+    buy.assert_not_called()
+    assert handled == []
+    assert "AAPL" not in state["positions"]
+
+
+def test_buy_allowed_one_slot_below_max_positions(mocker, monkeypatch):
+    """A free slot under the cap still opens normally."""
+    monkeypatch.setattr(portfolio.config, "NOTIONAL_PCT", 5.0)
+    monkeypatch.setattr(portfolio.config, "MAX_POSITIONS", 8)
+    monkeypatch.setattr(portfolio.config, "MAX_INVESTED_PCT", 80.0)
+    _, buy = _mock_broker(mocker, equity=1000.0, buying_power="900")
+    state = {"positions": _positions(7)}
+
+    handled = portfolio.execute_batch([_buy("AAPL")], state)
+
+    buy.assert_called_once()
+    assert "AAPL" in state["positions"]
+
+
+def test_max_positions_never_blocks_a_sell(mocker, monkeypatch):
+    """Exits must always run even when the book is at the position cap."""
+    monkeypatch.setattr(portfolio.config, "NOTIONAL_PCT", 5.0)
+    monkeypatch.setattr(portfolio.config, "MAX_POSITIONS", 8)
+    client, _ = _mock_broker(mocker, equity=1000.0, buying_power="900")
+    positions = _positions(8)
+    positions["SYM0"]  # SYM0 is held; selling it must work despite the cap
+    state = {"positions": positions}
+
+    handled = portfolio.execute_batch([_sell("SYM0")], state)
+
+    client.close_position.assert_called_once_with("SYM0")
+    assert "SYM0" not in state["positions"]
+    assert [t["ticker"] for t in handled] == ["SYM0"]
+
+
+def test_buy_skipped_when_deployment_ceiling_reached(mocker, monkeypatch):
+    """Already deployed past MAX_INVESTED_PCT of equity → new buy skipped, not handled.
+
+    equity=1000, bp=100 → invested≈900 > 80% ceiling (800). Buying power alone
+    ($100) would allow the $50 buy; only the deployment ceiling stops it.
+    """
+    monkeypatch.setattr(portfolio.config, "NOTIONAL_PCT", 5.0)
+    monkeypatch.setattr(portfolio.config, "MAX_POSITIONS", 99)
+    monkeypatch.setattr(portfolio.config, "MAX_INVESTED_PCT", 80.0)
+    _, buy = _mock_broker(mocker, equity=1000.0, buying_power="100")
+    state = {"positions": _positions(1)}
+
+    handled = portfolio.execute_batch([_buy("AAPL")], state)
+
+    buy.assert_not_called()
+    assert handled == []
+
+
+def test_batch_stops_buying_when_running_deployment_ceiling_hit(mocker, monkeypatch):
+    """Within one batch, buys stop once cumulative deployment hits the ceiling.
+
+    equity=1000, bp=320 → invested=680, ceiling 80%→800, room=120. At $50 each,
+    exactly 2 buys fit (100 ≤ 120); the 3rd would breach the ceiling.
+    """
+    monkeypatch.setattr(portfolio.config, "NOTIONAL_PCT", 5.0)
+    monkeypatch.setattr(portfolio.config, "MAX_POSITIONS", 99)
+    monkeypatch.setattr(portfolio.config, "MAX_INVESTED_PCT", 80.0)
+    _, buy = _mock_broker(mocker, equity=1000.0, buying_power="320")
+    state = {"positions": {}}
+
+    handled = portfolio.execute_batch(
+        [_buy("AAA", "t1"), _buy("BBB", "t2"), _buy("CCC", "t3")], state
+    )
+
+    assert buy.call_count == 2
+    assert [t["id"] for t in handled] == ["t1", "t2"]
+    assert set(state["positions"]) == {"AAA", "BBB"}
+
+
 def test_existing_positions_are_never_resized(mocker, monkeypatch):
     """A new signal must not generate orders against already-open positions —
     the old rebalance-to-buying_power/n behavior shrank the whole portfolio."""

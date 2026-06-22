@@ -187,3 +187,124 @@ def test_improved_exits_after_max_holding_days():
 
     assert len(exits) == 1
     assert exits[0].reason == "signal_expired"
+
+
+# ── EquityFractionStrategy: size by % of live equity + concentration caps ────
+
+
+def _filing(ticker: str, tid: str = "1", pub: str = "2020-12-10",
+            mid: int = 75000, side: str = "buy") -> dict:
+    return {"id": tid, "politician": "Jane Doe", "ticker": ticker, "type": side,
+            "amount_low": mid, "amount_high": mid, "amount_mid": mid,
+            "traded_date": "2020-11-10", "pub_date": pub}
+
+
+def test_equity_fraction_sizes_relative_to_live_equity():
+    """Notional = position_pct % of CURRENT equity, not a fixed dollar amount."""
+    s = bt_strategy.EquityFractionStrategy(
+        starting_cash=100000.0, notional_per_trade=5000.0,
+        pub_freshness_days=30, min_amount=5000,
+        position_pct=0.05, max_invested_pct=0.80, max_positions=8,
+    )
+    s.set_following("Jane Doe")
+
+    p = bt_portfolio.SimulatedPortfolio(starting_cash=100000.0)
+    actions = s.on_pub_date(date="2020-12-10", new_filings=[_filing("AAPL")], portfolio=p)
+
+    assert len(actions) == 1
+    # 5% of 100k = 5000
+    assert actions[0].notional == pytest.approx(5000.0)
+
+
+def test_equity_fraction_compounds_as_equity_grows():
+    """When equity has grown, the same 5% buys a larger dollar notional."""
+    s = bt_strategy.EquityFractionStrategy(
+        starting_cash=100000.0, notional_per_trade=5000.0,
+        pub_freshness_days=30, min_amount=5000,
+        position_pct=0.05, max_invested_pct=0.80, max_positions=8,
+    )
+    s.set_following("Jane Doe")
+
+    p = bt_portfolio.SimulatedPortfolio(starting_cash=100000.0)
+    p.cash = 200000.0  # equity doubled, fully in cash
+    actions = s.on_pub_date(date="2020-12-10", new_filings=[_filing("AAPL")], portfolio=p)
+
+    assert actions[0].notional == pytest.approx(10000.0)  # 5% of 200k
+
+
+def test_equity_fraction_respects_max_positions():
+    """No new buy once the book holds max_positions names."""
+    s = bt_strategy.EquityFractionStrategy(
+        starting_cash=100000.0, notional_per_trade=5000.0,
+        pub_freshness_days=30, min_amount=5000,
+        position_pct=0.05, max_invested_pct=0.95, max_positions=2,
+    )
+    s.set_following("Jane Doe")
+
+    p = bt_portfolio.SimulatedPortfolio(starting_cash=100000.0)
+    p.buy("XOM", notional=5000.0, fill_price=50.0, date_iso="2020-11-01")
+    p.buy("KO", notional=5000.0, fill_price=50.0, date_iso="2020-11-01")
+
+    actions = s.on_pub_date(date="2020-12-10", new_filings=[_filing("AAPL")], portfolio=p)
+
+    assert actions == []  # at cap
+
+
+def test_equity_fraction_respects_deployment_ceiling():
+    """Notional is clamped so total invested never exceeds max_invested_pct."""
+    s = bt_strategy.EquityFractionStrategy(
+        starting_cash=100000.0, notional_per_trade=5000.0,
+        pub_freshness_days=30, min_amount=5000,
+        position_pct=0.05, max_invested_pct=0.80, max_positions=99,
+    )
+    s.set_following("Jane Doe")
+
+    p = bt_portfolio.SimulatedPortfolio(starting_cash=100000.0)
+    # Already 78% deployed: invested 78k, cash 22k. Ceiling 80k → room = 2k.
+    p.buy("XOM", notional=78000.0, fill_price=50.0, date_iso="2020-11-01")
+
+    actions = s.on_pub_date(date="2020-12-10", new_filings=[_filing("AAPL")], portfolio=p)
+
+    assert len(actions) == 1
+    # 5% would be 5000 but only 2000 of room is left → clamp
+    assert actions[0].notional == pytest.approx(2000.0)
+
+
+def test_equity_fraction_skips_when_no_deployment_room():
+    """At the deployment ceiling, no buy is emitted (room ≤ 0)."""
+    s = bt_strategy.EquityFractionStrategy(
+        starting_cash=100000.0, notional_per_trade=5000.0,
+        pub_freshness_days=30, min_amount=5000,
+        position_pct=0.05, max_invested_pct=0.80, max_positions=99,
+    )
+    s.set_following("Jane Doe")
+
+    p = bt_portfolio.SimulatedPortfolio(starting_cash=100000.0)
+    p.buy("XOM", notional=80000.0, fill_price=50.0, date_iso="2020-11-01")  # exactly at ceiling
+
+    actions = s.on_pub_date(date="2020-12-10", new_filings=[_filing("AAPL")], portfolio=p)
+
+    assert actions == []
+
+
+def test_equity_fraction_still_emits_sells():
+    """Politician sells are passed through regardless of caps (no sizing needed)."""
+    s = bt_strategy.EquityFractionStrategy(
+        starting_cash=100000.0, notional_per_trade=5000.0,
+        pub_freshness_days=30, min_amount=5000,
+        position_pct=0.05, max_invested_pct=0.80, max_positions=1,
+    )
+    s.set_following("Jane Doe")
+
+    p = bt_portfolio.SimulatedPortfolio(starting_cash=100000.0)
+    p.buy("AAPL", notional=5000.0, fill_price=100.0, date_iso="2020-11-01")
+
+    actions = s.on_pub_date(
+        date="2020-12-10",
+        new_filings=[_filing("AAPL", side="sell")],
+        portfolio=p,
+    )
+
+    sells = [a for a in actions if a.kind == "sell"]
+    assert len(sells) == 1
+    assert sells[0].ticker == "AAPL"
