@@ -1,0 +1,700 @@
+<title>Auditoría alpaca-bot</title>
+<style>
+  :root {
+    --ground:   #F5F8F7;
+    --surface:  #FFFFFF;
+    --sunken:   #ECF1F0;
+    --ink:      #101719;
+    --ink-mid:  #3D4B4E;
+    --ink-soft: #6B7B7E;
+    --rule:     #D6DFDE;
+    --rule-soft:#E6ECEB;
+    --accent:   #14555F;
+    --accent-b: #E3EFF0;
+    --fixed:    #2C6B4F;
+    --fixed-bg: #E4F0E9;
+    --open:     #8A5A0B;
+    --open-bg:  #F7EDDA;
+    --crit:     #9E3423;
+    --crit-bg:  #F8E7E3;
+
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --serif: Charter, "Bitstream Charter", "Iowan Old Style", Georgia, "Times New Roman", serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:   #0C1214;
+      --surface:  #131C1E;
+      --sunken:   #0F1719;
+      --ink:      #E8EFEE;
+      --ink-mid:  #B4C2C2;
+      --ink-soft: #849697;
+      --rule:     #24322F;
+      --rule-soft:#1B2628;
+      --accent:   #63BAC4;
+      --accent-b: #16302F;
+      --fixed:    #6FBE93;
+      --fixed-bg: #162C22;
+      --open:     #D6A44E;
+      --open-bg:  #2E2415;
+      --crit:     #E08573;
+      --crit-bg:  #331B17;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:   #0C1214;
+    --surface:  #131C1E;
+    --sunken:   #0F1719;
+    --ink:      #E8EFEE;
+    --ink-mid:  #B4C2C2;
+    --ink-soft: #849697;
+    --rule:     #24322F;
+    --rule-soft:#1B2628;
+    --accent:   #63BAC4;
+    --accent-b: #16302F;
+    --fixed:    #6FBE93;
+    --fixed-bg: #162C22;
+    --open:     #D6A44E;
+    --open-bg:  #2E2415;
+    --crit:     #E08573;
+    --crit-bg:  #331B17;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 17px;
+    line-height: 1.62;
+    margin: 0;
+    padding: 0 1.25rem 6rem;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 50rem; margin: 0 auto; }
+
+  /* ── masthead ─────────────────────────────────────────── */
+  header.masthead {
+    padding: 4.5rem 0 2rem;
+    border-bottom: 2px solid var(--ink);
+    display: flex;
+    flex-direction: column;
+    gap: 1.1rem;
+  }
+  .eyebrow {
+    font-family: var(--sans);
+    font-size: 0.7rem;
+    font-weight: 650;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0;
+  }
+  h1 {
+    font-family: var(--sans);
+    font-size: clamp(2.1rem, 6vw, 3.1rem);
+    font-weight: 760;
+    letter-spacing: -0.032em;
+    line-height: 1.04;
+    text-wrap: balance;
+    margin: 0;
+  }
+  .standfirst {
+    font-size: 1.16rem;
+    line-height: 1.5;
+    color: var(--ink-mid);
+    margin: 0;
+    max-width: 34em;
+  }
+  .standfirst strong { color: var(--ink); font-weight: 600; }
+
+  /* ── stat strip ───────────────────────────────────────── */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    margin: 2.5rem 0 3rem;
+  }
+  .stat { background: var(--surface); padding: 1.15rem 1.2rem; display: flex; flex-direction: column; gap: 0.3rem; }
+  .stat dt {
+    font-family: var(--sans);
+    font-size: 0.66rem;
+    font-weight: 620;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin: 0;
+  }
+  .stat dd {
+    font-family: var(--mono);
+    font-size: 1.5rem;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+    margin: 0;
+    line-height: 1.1;
+  }
+  .stat .sub { font-family: var(--sans); font-size: 0.76rem; color: var(--ink-soft); line-height: 1.35; }
+  .stat dd.alarm { color: var(--crit); }
+  .stat dd.good  { color: var(--fixed); }
+
+  /* ── sections ─────────────────────────────────────────── */
+  h2.section {
+    font-family: var(--sans);
+    font-size: 0.72rem;
+    font-weight: 680;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin: 3.5rem 0 1.5rem;
+    padding-bottom: 0.6rem;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  /* ── findings ─────────────────────────────────────────── */
+  .finding {
+    display: grid;
+    grid-template-columns: 3.2rem 1fr;
+    gap: 0 1.4rem;
+    padding: 2rem 0;
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  .finding:last-of-type { border-bottom: none; }
+  .fnum {
+    font-family: var(--mono);
+    font-size: 1.5rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--rule);
+    line-height: 1;
+    padding-top: 0.35rem;
+  }
+  :root[data-theme="dark"] .fnum { color: var(--ink-soft); opacity: 0.5; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .fnum { color: var(--ink-soft); opacity: 0.5; }
+  }
+  .fbody { min-width: 0; display: flex; flex-direction: column; gap: 0.85rem; }
+  .fhead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.7rem; }
+  .fbody h3 {
+    font-family: var(--sans);
+    font-size: 1.32rem;
+    font-weight: 660;
+    letter-spacing: -0.018em;
+    line-height: 1.25;
+    text-wrap: balance;
+    margin: 0;
+    flex: 1 1 16rem;
+  }
+  .fbody p { margin: 0; }
+  .fbody p + p { margin-top: -0.1rem; }
+
+  .chip {
+    font-family: var(--sans);
+    font-size: 0.66rem;
+    font-weight: 680;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 0.26rem 0.6rem;
+    border-radius: 2px;
+    white-space: nowrap;
+  }
+  .chip.fixed { color: var(--fixed); background: var(--fixed-bg); }
+  .chip.open  { color: var(--open);  background: var(--open-bg); }
+  .chip.crit  { color: var(--crit);  background: var(--crit-bg); }
+
+  /* ── evidence block ───────────────────────────────────── */
+  .evidence {
+    background: var(--sunken);
+    border-left: 3px solid var(--accent);
+    padding: 0.95rem 1.1rem;
+    overflow-x: auto;
+  }
+  .evidence pre {
+    font-family: var(--mono);
+    font-size: 0.79rem;
+    line-height: 1.65;
+    color: var(--ink-mid);
+    margin: 0;
+    white-space: pre;
+  }
+  .evidence .lbl {
+    font-family: var(--sans);
+    font-size: 0.63rem;
+    font-weight: 660;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 0.55rem;
+  }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    background: var(--sunken);
+    padding: 0.1em 0.34em;
+    border-radius: 2px;
+    color: var(--ink-mid);
+  }
+
+  /* ── score ladder (the wheel finding) ─────────────────── */
+  .ladder { display: flex; flex-direction: column; gap: 1px; background: var(--rule); border: 1px solid var(--rule); }
+  .rung {
+    background: var(--surface);
+    display: grid;
+    grid-template-columns: 4.2rem 5.6rem 1fr 3.4rem;
+    align-items: center;
+    gap: 0.8rem;
+    padding: 0.62rem 0.85rem;
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .rung .otm { color: var(--ink); font-weight: 600; }
+  .rung .strikes { color: var(--ink-soft); font-size: 0.76rem; }
+  .rung .bar { height: 0.62rem; background: var(--rule-soft); position: relative; }
+  .rung .bar i { display: block; height: 100%; background: var(--accent); opacity: 0.55; }
+  .rung .val { text-align: right; color: var(--ink-mid); }
+  .rung.target { background: var(--crit-bg); }
+  .rung.target .otm, .rung.target .val { color: var(--crit); font-weight: 700; }
+  .rung.target .bar i { background: var(--crit); opacity: 0.75; }
+  .rung.reach { background: var(--fixed-bg); }
+  .rung.reach .otm, .rung.reach .val { color: var(--fixed); font-weight: 700; }
+  .rung.reach .bar i { background: var(--fixed); opacity: 0.75; }
+  .ladder-note {
+    font-family: var(--sans);
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+    margin: 0.6rem 0 0;
+  }
+  .threshold-line {
+    position: absolute; top: -3px; bottom: -3px; width: 2px;
+    background: var(--ink); opacity: 0.55;
+  }
+
+  /* ── tables ───────────────────────────────────────────── */
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-family: var(--sans); font-size: 0.87rem; }
+  th, td { text-align: left; padding: 0.62rem 0.8rem; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  th {
+    font-size: 0.66rem; font-weight: 680; letter-spacing: 0.11em;
+    text-transform: uppercase; color: var(--ink-soft);
+    border-bottom: 1px solid var(--rule);
+  }
+  td code { font-size: 0.82em; }
+  tbody tr:last-child td { border-bottom: none; }
+
+  /* ── minor list ───────────────────────────────────────── */
+  ul.minor { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.95rem; }
+  ul.minor li { padding-left: 1.2rem; position: relative; font-size: 0.96rem; color: var(--ink-mid); }
+  ul.minor li::before {
+    content: ""; position: absolute; left: 0; top: 0.62em;
+    width: 5px; height: 5px; background: var(--accent); border-radius: 50%;
+  }
+  ul.minor li strong { color: var(--ink); font-weight: 600; }
+
+  /* ── callout ──────────────────────────────────────────── */
+  .callout {
+    border: 1px solid var(--open);
+    background: var(--open-bg);
+    padding: 1.15rem 1.3rem;
+    display: flex; flex-direction: column; gap: 0.55rem;
+  }
+  .callout .lbl {
+    font-family: var(--sans); font-size: 0.66rem; font-weight: 700;
+    letter-spacing: 0.13em; text-transform: uppercase; color: var(--open);
+  }
+  .callout p { margin: 0; color: var(--ink); }
+
+  footer {
+    margin-top: 4rem; padding-top: 1.5rem;
+    border-top: 1px solid var(--rule);
+    font-family: var(--sans); font-size: 0.8rem; color: var(--ink-soft);
+    display: flex; flex-wrap: wrap; gap: 0.4rem 1.5rem;
+  }
+
+  @media (max-width: 34rem) {
+    body { font-size: 16px; }
+    .finding { grid-template-columns: 1fr; gap: 0.5rem; }
+    .fnum { padding-top: 0; font-size: 1.1rem; }
+    .rung { grid-template-columns: 3.6rem 1fr 3rem; }
+    .rung .strikes { display: none; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <p class="eyebrow">alpaca-bot · auditoría de estrategia · 15 ago 2026</p>
+    <h1>El bot no perdía dinero. No operaba.</h1>
+    <p class="standfirst">
+      Revisión de las tres estrategias con las skills de
+      <strong>claude-trading-skills</strong> como checklist. De las tres, una
+      llevaba días muerta por un bug, otra no podía abrir una sola posición por
+      una configuración imposible, y la tercera tenía desplegado el 5 % del capital.
+    </p>
+  </header>
+
+  <dl class="stats">
+    <div class="stat">
+      <dt>Equity</dt>
+      <dd>$1&thinsp;095</dd>
+      <span class="sub">cuenta paper</span>
+    </div>
+    <div class="stat">
+      <dt>En riesgo</dt>
+      <dd class="alarm">$54</dd>
+      <span class="sub">2 posiciones · 5 %</span>
+    </div>
+    <div class="stat">
+      <dt>Wheel</dt>
+      <dd class="alarm">0</dd>
+      <span class="sub">ciclos desde el 1-may · recalibrado</span>
+    </div>
+    <div class="stat">
+      <dt>Tests</dt>
+      <dd class="good">325</dd>
+      <span class="sub">desde 302 · build OK</span>
+    </div>
+  </dl>
+
+  <h2 class="section">Corregido</h2>
+
+  <div class="finding">
+    <div class="fnum">01</div>
+    <div class="fbody">
+      <div class="fhead">
+        <h3>La estrategia <code>trailing</code> moría en el primer stop-out</h3>
+        <span class="chip fixed">Corregido</span>
+      </div>
+
+      <div class="evidence">
+        <span class="lbl">docker logs alpaca-bot — el ciclo completo, y nada después</span>
+<pre>[TRAILING] Resuming AMZN: entry=$246.47 floor=$221.82
+[STRATEGY] Floor raised $221.82 → $252.38
+[STRATEGY] Floor raised $260.10 → $262.73
+[TRAILING] SELL | Floor breached — price=$265.03 floor=$265.04</pre>
+      </div>
+
+      <p><code>trailing_task()</code> era una línea recta: entrar una vez y bloquearse
+      para siempre dentro de <code>trailing_stream.start()</code>. Al saltar el stop,
+      <code>trailing_state.clear()</code> borraba el estado, y desde ese momento cada
+      tick entraba en <code>on_price</code> y salía por la guarda
+      <code>if current is None: return</code>.</p>
+
+      <p>El supervisor siguió transmitiendo AMZN durante días — un símbolo que ya no
+      se tenía — ocupando la <strong>única conexión de datos</strong> que Alpaca
+      permite por cuenta. Solo un reinicio del contenedor lo revivía, y nadie lo
+      reinició. Es la misma clase de fallo que el propio <code>CLAUDE.md</code> §7
+      describe para el kill switch: una estrategia que se retira sola en silencio.</p>
+
+      <p>Ahora <code>trailing/stream.py</code> expone un <code>StreamHandle</code> que
+      apaga el supervisor, y la tarea es un bucle: posición → stream → cierre →
+      enfriamiento → siguiente. Detalle no obvio: <code>on_price</code> corre
+      <em>dentro</em> del event loop del stream, y el <code>stop()</code> del SDK hace
+      <code>run_coroutine_threadsafe(...).result(timeout=5)</code> — llamarlo desde ese
+      loop bloquea el loop que debe atender la corrutina. Por eso el handle usa
+      <code>stop_ws()</code>, que solo encola la parada.</p>
+
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr><th>Variable nueva</th><th>Default</th><th>Por qué</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>TRAILING_REENTRY_COOLDOWN_SECONDS</code></td>
+              <td>3600</td>
+              <td>Reentrar en el mismo tick que cerró la posición es recomprar justo lo que rompió el floor.</td>
+            </tr>
+            <tr>
+              <td><code>TRAILING_ENTRY_RETRY_SECONDS</code></td>
+              <td>300</td>
+              <td>Una market a las 03:00 ET se encola hasta la apertura y ejecuta a precio desconocido, ciega al floor con el que se dimensionó.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="fnum">03</div>
+    <div class="fbody">
+      <div class="fhead">
+        <h3>La estrategia <code>copy</code> nunca consultaba el kill switch</h3>
+        <span class="chip fixed">Corregido</span>
+      </div>
+
+      <p><code>shared/kill_switch.py</code> dice literalmente <em>«designed to be
+      queried by every strategy»</em>. El wheel lo consulta en <code>IDLE</code>; la
+      entrada de trailing lo consulta. <code>copy_trader/</code> no lo consultaba en
+      ningún punto — y era <strong>la única de las tres que tenía posiciones
+      abiertas</strong>.</p>
+
+      <p>Un drawdown de cuenta del −20 % paraba el wheel (que no operaba igualmente) y
+      dejaba a copy abriendo nombres nuevos sin ningún freno.</p>
+
+      <p>Ahora <code>execute_batch(..., halted=)</code> salta las compras y deja pasar
+      las ventas, respetando el sesgo <em>fail-open</em> documentado en §7: un halt
+      debe dejar el riesgo <strong>gestionado</strong>, no congelado. Una compra
+      bloqueada no se marca como vista, así que se reintenta en cuanto el halt se
+      libere y mientras el filing siga fresco.</p>
+    </div>
+  </div>
+
+  <h2 class="section">Recalibrado</h2>
+
+  <div class="finding">
+    <div class="fnum">02</div>
+    <div class="fbody">
+      <div class="fhead">
+        <h3>El <code>wheel</code> no podía abrir una posición ni una sola vez</h3>
+        <span class="chip fixed">Recalibrado</span>
+      </div>
+
+      <p><code>data/wheel_state.json</code> marca <code>cycles: 0</code>,
+      <code>total_premium: 0.0</code> desde que se abrió la cuenta el 1-may-2026, y el
+      log es un muro ininterrumpido de <code>reject … score=0.08 &lt;0.30</code>.</p>
+
+      <p><code>score = credit / max_loss</code> cae monótonamente conforme el strike
+      corto se aleja del dinero: más lejos es menos probable que se rompa, así que
+      paga menos. Los dos parámetros están acoplados, y su configuración actual es
+      <strong>mutuamente inalcanzable</strong>. Medido contra la cadena real de SOFI
+      el 15-ago (spot $18.29, ancho $2, 20-27 DTE):</p>
+
+      <div class="ladder">
+        <div class="rung">
+          <span class="otm">12,5 %</span><span class="strikes">16,0 / 14,0</span>
+          <span class="bar"><i style="width:16%"></i></span><span class="val">0,06</span>
+        </div>
+        <div class="rung target">
+          <span class="otm">9,8 %</span><span class="strikes">16,5 / 14,5</span>
+          <span class="bar"><i style="width:25%"></i></span><span class="val">0,09</span>
+        </div>
+        <div class="rung">
+          <span class="otm">7,1 %</span><span class="strikes">17,0 / 15,0</span>
+          <span class="bar"><i style="width:39%"></i></span><span class="val">0,14</span>
+        </div>
+        <div class="rung">
+          <span class="otm">4,3 %</span><span class="strikes">17,5 / 15,5</span>
+          <span class="bar"><i style="width:53%"></i></span><span class="val">0,19</span>
+        </div>
+        <div class="rung reach">
+          <span class="otm">1,6 %</span><span class="strikes">18,0 / 16,0</span>
+          <span class="bar"><i style="width:100%"></i></span><span class="val">0,36</span>
+        </div>
+      </div>
+      <p class="ladder-note">
+        En rojo, el OTM configurado (<code>WHEEL_TARGET_OTM_PCT=0.10</code>): techo real
+        <strong>0,09</strong>. En verde, el primer nivel que alcanza el umbral
+        configurado (<code>WHEEL_SCORE_THRESHOLD=0.30</code>) — a 1,6 % OTM, es decir
+        prácticamente <em>at-the-money</em>.
+      </p>
+
+      <p>Y hay un segundo candado encima: <code>_fetch_option_chain()</code> recorta los
+      strikes pedidos a <code>[target_short − width − 1, target_short + 1]</code>. El
+      motor <strong>ni siquiera descarga</strong> los strikes que podrían calificar.
+      Subir solo el umbral no serviría; la ventana es la restricción vinculante.</p>
+
+      <p>No he tocado la calibración: elegir entre más prima y más riesgo de asignación
+      es una decisión de riesgo tuya, y <code>CLAUDE.md</code> §1 exige backtest antes
+      de tocar lógica de selección. Lo que sí he hecho es que deje de ser invisible —
+      <code>wheel/feasibility.py</code> cuenta ciclos secos y tras 40 seguidos emite
+      <strong>una sola</strong> alerta, por log y por Telegram, con el techo medido
+      frente al umbral.</p>
+
+      <div class="callout" style="border-color:var(--fixed); background:var(--fixed-bg)">
+        <span class="lbl" style="color:var(--fixed)">Resuelto · aplicado en .env</span>
+        <p>Elegida la opción de más prima:
+        <code>WHEEL_TARGET_OTM_PCT=0.04</code> ·
+        <code>WHEEL_SCORE_THRESHOLD=0.15</code>. Backup en
+        <code>.env.bak.20260815</code>.</p>
+      </div>
+
+      <p><strong>Es 0,04 y no 0,05, y el motivo importa.</strong> Los strikes de SOFI
+      van de $0,50 en $0,50, y el motor coge <em>el strike más alto que no supere</em>
+      <code>spot × (1 − target_otm_pct)</code>. Con 0,05 el target cae en $17,38 y baja
+      un escalón entero a 17,0/15,0 → score <strong>0,140</strong>, otra vez por debajo
+      del umbral: <strong>habría recreado exactamente el mismo bug</strong>. Verificado
+      ejecutando el motor real contra la cadena en vivo, no derivado a mano:</p>
+
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr><th>OTM config</th><th>Elige</th><th>OTM real</th><th>Score</th><th>¿Pasa 0,15?</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>0.03</code></td><td>17,5 / 15,5</td><td>4,3 %</td><td>0,194</td><td>sí</td></tr>
+            <tr><td><strong><code>0.04</code></strong></td><td><strong>17,5 / 15,5</strong></td><td><strong>4,3 %</strong></td><td><strong>0,194</strong></td><td><strong>sí</strong></td></tr>
+            <tr><td><code>0.045</code></td><td>17,0 / 15,0</td><td>7,1 %</td><td>0,140</td><td>no</td></tr>
+            <tr><td><code>0.05</code></td><td>17,0 / 15,0</td><td>7,1 %</td><td>0,140</td><td>no</td></tr>
+            <tr><td><code>0.10</code></td><td>16,0 / 14,0</td><td>12,5 %</td><td>0,064</td><td>no</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>La ventana de strikes <strong>no hizo falta ampliarla</strong>: era vinculante
+      a 10 % OTM (dejaba fuera 17,5 y 18,0), pero a 4 % ya contiene los strikes que
+      califican.</p>
+
+      <p><strong>Lección de calibración:</strong> el escalón del strike ladder domina
+      sobre el porcentaje configurado. Con strikes de $0,50 sobre un subyacente de $18,
+      cada escalón son ~2,7 puntos porcentuales de OTM — más que la diferencia entre
+      «conservador» y «agresivo» en el propio parámetro. No calibrar este par sin
+      simular qué strike se acaba eligiendo.</p>
+    </div>
+  </div>
+
+  <h2 class="section">Abierto — requiere backtest o decisión</h2>
+
+  <div class="finding">
+    <div class="fnum">04</div>
+    <div class="fbody">
+      <div class="fhead">
+        <h3>El <code>win_rate</code> del scorer no discrimina en mercado alcista</h3>
+        <span class="chip open">Requiere backtest</span>
+      </div>
+
+      <p><code>_calculate_win_rate</code> cuenta qué fracción de las compras está por
+      encima del precio de entrada <em>hoy</em>, sin benchmark. En un mercado que sube,
+      todo el mundo puntúa cerca de 1,0 y el término deja de separar: el ranking pasa a
+      decidirse por <code>recency</code> y <code>volume</code>, o sea que sigue a quien
+      <strong>más opera</strong>, no a quien mejor acierta.</p>
+
+      <p>Además la muestra es solo lo que hay en las ~3 páginas scrapeadas, y hace una
+      llamada <code>get_stock_bars</code> por cada compra. El arreglo correcto es
+      hacerlo relativo al benchmark — exceso sobre SPY en la misma ventana — y es
+      lógica de entrada, así que pasa por el gate de backtest de §1. Queda anotado como
+      CAVEAT en el docstring del módulo.</p>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="fnum">05</div>
+    <div class="fbody">
+      <div class="fhead">
+        <h3>Utilización de capital: 5 % desplegado</h3>
+        <span class="chip open">Abierto</span>
+      </div>
+
+      <p>Con equity de $1&thinsp;095, <code>MAX_POSITIONS=8</code> y
+      <code>NOTIONAL_PCT=5 %</code>, el libro objetivo son 8 × $54,75 ≈ $438 (40 %).
+      Real: <strong>2 posiciones de $27,03</strong> — PG y V, ambas del 13-may-2026,
+      dimensionadas bajo el código viejo de rebalanceo.</p>
+
+      <p>El embudo es seguir a <strong>un solo político</strong>: con 29 trades por poll
+      repartidos entre todos, al seguido le tocan muy pocos, y encima tienen que superar
+      <code>MIN_AMOUNT=$15 000</code> y 30 días de frescura. Ese mínimo se validó sobre
+      un backtest de $100 000; en una cuenta de $1 000 sigue teniendo sentido como
+      filtro de convicción, pero conviene comprobar que no está estrangulando el flujo
+      hasta dejarlo en nada.</p>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="fnum">06</div>
+    <div class="fbody">
+      <div class="fhead">
+        <h3>Los tres colchones de capital compiten sin árbitro</h3>
+        <span class="chip open">Abierto</span>
+      </div>
+
+      <p><code>CLAUDE.md</code> §5 avisa de esto pero nada en el código lo hace cumplir.
+      Con equity $1&thinsp;095: copy puede desplegar hasta el 80 % ($876), trailing coge
+      el 30 % del buying power en la entrada, y el wheel necesita
+      <code>min_buying_power=$400</code> o se para en seco. Los tres a la vez no caben.</p>
+
+      <p>Hoy no se nota porque dos de las tres no operaban. En cuanto operen las tres, el
+      wheel será el que se quede fuera — silenciosamente, por su
+      <code>_capital_guard</code>.</p>
+    </div>
+  </div>
+
+  <h2 class="section">Menores</h2>
+
+  <ul class="minor">
+    <li><strong><code>datetime.utcnow()</code> — 6 usos.</strong> Deprecado en Python 3.12
+    (la imagen corre 3.12), y semánticamente flojo: el <code>today_iso</code> que
+    alimenta <code>MAX_HOLDING_DAYS</code> se calcula en UTC, así que a partir de las
+    20:00 ET ya es «mañana» y la salida por vencimiento puede dispararse un día antes.</li>
+
+    <li><strong><code>market_hours.is_market_open()</code> ignora los festivos.</strong>
+    Solo mira fin de semana y horario. En un festivo el wheel corre ciclos y las órdenes
+    se encolan. Alpaca expone un endpoint de calendario.</li>
+
+    <li><strong><code>seen_trade_ids</code> crece sin límite.</strong> 605 entradas hoy,
+    y la pertenencia se comprueba con <code>in</code> sobre una lista. No es urgente,
+    pero no hay poda.</li>
+
+    <li><strong><code>get_consensus_ticker</code> cae a <code>"TSLA"</code> hardcoded</strong>
+    si el scraper falla. La entrada de trailing es el 30 % del buying power: un fallo del
+    scraper compra TSLA sin que nadie lo haya decidido.</li>
+
+    <li><strong>Ninguna estrategia mira el régimen de mercado.</strong> No hay filtro de
+    tendencia ni de breadth en ningún punto de entrada. Es justo el hueco que cubren las
+    skills <code>market-breadth-analyzer</code> y <code>uptrend-analyzer</code>, que leen
+    CSV público y no necesitan API key.</li>
+  </ul>
+
+  <h2 class="section">Skills instaladas</h2>
+
+  <p>En <code>.claude/skills/</code>. El repo de origen está pensado para inversión
+  discrecional en renta variable US, así que se instaló solo lo aplicable a este bot; se
+  descartaron las que dependen de FMP/FINVIZ de pago o de flujos manuales de screening
+  (CANSLIM, VCP, dividendos, stockbee, edge-*, kanchi).</p>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Skill</th><th>Para qué aquí</th></tr></thead>
+      <tbody>
+        <tr><td><code>backtest-expert</code></td><td>Refuerza el gate de §1: robustez de parámetros, slippage, sesgos, sobreajuste</td></tr>
+        <tr><td><code>options-strategy-advisor</code></td><td>Black-Scholes y griegas — es lo que sostiene la calibración del wheel</td></tr>
+        <tr><td><code>position-sizer</code></td><td>Dimensionado por riesgo y ATR, contraste para <code>NOTIONAL_PCT</code> e <code>INITIAL_ALLOCATION</code></td></tr>
+        <tr><td><code>drawdown-circuit-breaker</code></td><td>Referencia contra la que contrastar <code>shared/kill_switch.py</code></td></tr>
+        <tr><td><code>market-breadth-analyzer</code>, <code>uptrend-analyzer</code></td><td>Filtro de régimen (hallazgo menor) — sin API key</td></tr>
+        <tr><td><code>portfolio-manager</code></td><td>Revisión de cartera vía Alpaca</td></tr>
+        <tr><td><code>trade-performance-coach</code>, <code>weekly-performance-digest</code></td><td>El bot no lleva ningún diario de operaciones</td></tr>
+        <tr><td><code>exposure-coach</code></td><td>Techo de exposición neta — se cruza con el hallazgo 06</td></tr>
+        <tr><td><code>pre-trade-discipline-gate</code>, <code>trader-memory-core</code>, <code>data-quality-checker</code></td><td>Soporte</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p><code>.gitignore</code> lleva ahora <code>!.claude/skills/**/*.json</code>: la regla
+  global <code>*.json</code> se comía los esquemas y fixtures de las skills.</p>
+
+  <h2 class="section">Verificación</h2>
+
+  <div class="evidence">
+    <span class="lbl">estado tras los cambios</span>
+<pre>325 passed, 1 skipped     (baseline al empezar: 302 passed)
+docker compose build      OK</pre>
+  </div>
+
+  <p>Todo cambio de lógica fue en rojo → verde: los tests se escribieron antes que la
+  implementación en los tres casos — <code>StreamHandle</code>,
+  <code>feasibility</code> y el gate del kill switch en copy.</p>
+
+  <div class="callout" style="margin-top:1.5rem; border-color:var(--fixed); background:var(--fixed-bg)">
+    <span class="lbl" style="color:var(--fixed)">Desplegado · sábado 15-ago 12:57</span>
+    <p>Contenedor recreado sobre la imagen nueva, estado intacto (PG y V siguen ahí).
+    El mercado estaba cerrado, así que no se disparó ninguna operación —
+    y eso mismo confirma el arreglo: <strong>cero líneas <code>[TRAILING]</code></strong>
+    en el arranque, donde el código viejo habría intentado comprar de inmediato.</p>
+    <p>El lunes al abrir (15:30 CEST), <code>trailing</code> entrará por primera vez
+    desde el stop de AMZN: ~<strong>$308</strong>, el 30 % del buying power.</p>
+  </div>
+
+  <footer>
+    <span>alpaca-bot · auditoría 15 ago 2026</span>
+    <span>Fuente: <code>docs/2026-08-15-trading-audit.md</code></span>
+  </footer>
+
+</div>

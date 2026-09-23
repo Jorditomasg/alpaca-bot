@@ -3,6 +3,8 @@
 *.json
 # Allow committed test fixtures
 !tests/fixtures/**/*.json
+# Allow skill assets (schemas + their own fixtures) — these are source, not state
+!.claude/skills/**/*.json
 
 # Python
 __pycache__/
