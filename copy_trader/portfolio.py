@@ -181,6 +181,11 @@ def _cancel_pending(client, symbol: str) -> None:
             symbols=[symbol],
         ))
         for order in open_orders:
+            # The `symbols` filter is not exact: Alpaca also returns multi-leg
+            # option orders (symbol=None), e.g. the wheel's spread profit-take.
+            # All strategies share one account — only cancel our own ticker.
+            if getattr(order, "symbol", None) != symbol:
+                continue
             client.cancel_order_by_id(order.id)
             print(f"[PORTFOLIO] Cancelled pending order {order.id} for {symbol}")
     except Exception:

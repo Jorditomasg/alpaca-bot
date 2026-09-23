@@ -343,3 +343,29 @@ def test_not_halted_is_the_default_and_behaves_as_before(mocker, monkeypatch):
     buy.assert_called_once_with("AAPL", notional=50.0)
     assert [t["ticker"] for t in handled] == ["AAPL"]
 
+
+def _order(order_id: str, symbol):
+    o = MagicMock()
+    o.id = order_id
+    o.symbol = symbol
+    return o
+
+
+def test_closing_a_copy_position_never_cancels_another_strategys_multileg_order(mocker):
+    # Incident 2026-09-22: Alpaca's `symbols=[V]` filter also returned the wheel's
+    # SOFI multi-leg profit-take (mleg orders carry symbol=None). Closing V
+    # cancelled it and the spread was left open into expiry week.
+    state = {"positions": {"V": {"notional": 250.0, "entry_date": "2026-09-01",
+                                 "cost_basis": 300.0, "high_watermark": 320.0}}}
+    client = MagicMock()
+    client.get_orders.return_value = [
+        _order("own-stop", "V"),
+        _order("wheel-mleg", None),
+        _order("other", "SOFI260925P00017500"),
+    ]
+    mocker.patch("shared.alpaca_client.trading", return_value=client)
+
+    portfolio.close_and_remove("V", state)
+
+    client.cancel_order_by_id.assert_called_once_with("own-stop")
+    client.close_position.assert_called_once_with("V")
