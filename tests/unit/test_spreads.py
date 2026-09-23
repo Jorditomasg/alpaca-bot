@@ -2,7 +2,13 @@
 import pytest
 from datetime import date, timedelta
 from alpaca.trading.enums import OrderClass, PositionIntent, OrderSide
-from wheel.spreads import best_bull_put_spread, build_open_order, build_close_order, spread_mid_price
+from wheel.spreads import (
+    best_bull_put_spread,
+    best_reachable_score,
+    build_open_order,
+    build_close_order,
+    spread_mid_price,
+)
 from wheel.config import get_config
 
 
@@ -294,6 +300,53 @@ def test_one_sided_quote_ask_zero_rejects_spread(default_cfg):
 
 
 # ── order shape validation ────────────────────────────────────────────────────
+
+# ── reachable-score reporting (2026-08-15 audit) ─────────────────────────────
+#
+# `best_bull_put_spread` returning None is ambiguous: it means "nothing paid
+# enough today" and "your threshold is unreachable at this OTM distance" and
+# "no leg had a two-sided quote". The wheel sat on the third-worst of those for
+# 3.5 months (cycles: 0) because the caller could not tell them apart.
+
+def test_best_reachable_score_reports_the_ceiling_a_rejection_hid(default_cfg):
+    """0.10/0.20 credit on a $2 spread → $10 credit, $190 max loss → 0.0526."""
+    chain = _make_chain(short_bid=0.19, short_ask=0.21, long_bid=0.09, long_ask=0.11)
+
+    assert best_bull_put_spread("SOFI", 10.0, chain, default_cfg) is None
+    assert best_reachable_score("SOFI", 10.0, chain, default_cfg) == pytest.approx(
+        10.0 / 190.0, rel=1e-3
+    )
+
+
+def test_best_reachable_score_matches_the_winner_when_one_qualifies(default_cfg):
+    chain = _make_chain()
+    winner = best_bull_put_spread("SOFI", 10.0, chain, default_cfg)
+
+    assert winner is not None
+    assert best_reachable_score("SOFI", 10.0, chain, default_cfg) == pytest.approx(
+        winner["score"], rel=1e-6
+    )
+
+
+def test_best_reachable_score_is_none_when_nothing_is_quotable(default_cfg):
+    """A one-sided quote is a data problem, and must not read as a low ceiling."""
+    chain = _make_chain(short_bid=0.0, short_ask=0.50)
+
+    assert best_reachable_score("SOFI", 10.0, chain, default_cfg) is None
+
+
+def test_best_reachable_score_ignores_the_threshold_entirely(default_cfg):
+    """Whatever the threshold, the measured ceiling is a property of the chain."""
+    from dataclasses import replace
+
+    chain = _make_chain()
+    strict = replace(default_cfg, score_threshold=99.0)
+
+    assert best_bull_put_spread("SOFI", 10.0, chain, strict) is None
+    assert best_reachable_score("SOFI", 10.0, chain, strict) == pytest.approx(
+        best_reachable_score("SOFI", 10.0, chain, default_cfg)
+    )
+
 
 def test_build_open_order_shape():
     order = build_open_order("SOFI260117P00009000", "SOFI260117P00007000", 0.30)

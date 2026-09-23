@@ -112,3 +112,62 @@ before merging.
 `.gitignore` already protects this: `*.json` is gitignored except
 `tests/fixtures/**/*.json` (which is whitelisted for committed test fixtures).
 If you add a new state file or data dump, verify it's covered before staging.
+
+## 7. Kill switch — confirmed breaches only, and it re-arms
+
+**Incident 2026-07-30.** `data/kill_switch.json` was latched at
+`equity=$607.80, drawdown=43.7%`, which had halted every new wheel entry.
+Alpaca's own `/account/portfolio/history` showed equity **never left the
+$1,000–$1,084 band** since the account opened on 2026-05-01 — the reading was
+never real. The same logs held ~7,900 `socket.gaierror` websocket failures, so
+the most likely source is a degraded API read during that outage.
+
+Two design flaws turned one bad sample into a dead strategy:
+
+- It halted on a **single** reading. `update()` had no notion of confirmation.
+- It **never re-armed** — "once tripped, stays tripped until manually reset
+  (delete the file)". That is a fuse, not a circuit breaker: whatever trips it
+  silently retires the strategy until a human notices. Nobody did, for days.
+
+Invariants now enforced by `shared/kill_switch.py` (and
+`tests/unit/test_kill_switch.py`):
+
+- A breach must hold for `KILL_SWITCH_CONFIRMATIONS` (default **3**)
+  consecutive reads before halting. Any healthy read resets the streak, so
+  isolated glitches can never accumulate into a halt.
+- A halt clears once drawdown recovers to within
+  `KILL_SWITCH_RECOVERY_FRACTION` (default **0.5**) of the limit — i.e. back
+  under -10% with the default -20% limit. Not the instant it ticks under the
+  limit, which would flap around the threshold.
+- `halt_count` records how often the breaker has fired; `recovered_at` records
+  the equity it re-armed at. Do not remove these — they are the only evidence
+  that a halt happened at all once it clears.
+- `load()` backfills fields added after a state file was written, so an
+  existing halt survives an upgrade instead of `KeyError`-ing.
+
+**Do not "simplify" this back to a single-sample latch.** Fail-open on a bad
+equity read is the correct bias here: exits are never gated by the kill switch,
+so a missed halt leaves risk *managed*, while a false halt leaves capital idle
+and unmonitored.
+
+## 8. The price stream is supervised — never call `wss.run()` bare
+
+Same incident: ~7,900 `socket.gaierror: Temporary failure in name resolution`
+plus **829 `ValueError: connection limit exceeded`**. Alpaca allows one
+concurrent data connection per account. The SDK's `StockDataStream.run()`
+reconnects internally with no backoff and **without releasing the previous
+session**, so a local DNS blip became a hot retry loop that kept claiming a slot
+it had never given back.
+
+The cost is not cosmetic: while the feed is down `on_price` never fires, so the
+trailing stop **stops trailing** and the open position runs unbounded.
+
+`trailing/stream.py:start()` now owns the reconnect policy — release the dead
+stream, exponential backoff `INITIAL_BACKOFF`(5s) → `MAX_BACKOFF`(300s), reset
+after a run that held for `HEALTHY_RUN_SECONDS`. The `stream_factory` / `sleep`
+/ `clock` / `max_restarts` parameters exist so that policy is testable without a
+network or a wall-clock wait (`tests/unit/test_stream.py`).
+
+`docker-compose.yml` also pins DNS fallbacks (`192.168.1.1` primary → Pi-hole,
+then `9.9.9.9` / `1.1.1.1`) so a Pi-hole restart on the host no longer takes the
+feed down with it.

@@ -286,3 +286,60 @@ def test_close_and_remove_no_op_when_position_missing(mocker):
     portfolio.close_and_remove("AAPL", state)  # should not raise
 
     client.close_position.assert_not_called()
+
+
+# ── Kill switch: halted means no NEW risk, never a blocked exit ──────────────
+#
+# 2026-08-15 audit. shared/kill_switch.py says it is "designed to be queried by
+# every strategy", and wheel/engine.py and the trailing entry both do. The copy
+# strategy — the only one that actually held positions — never asked. A -20%
+# account drawdown halted the wheel and left copy free to keep opening names.
+
+
+def test_halted_kill_switch_blocks_new_buys(mocker, monkeypatch):
+    monkeypatch.setattr(portfolio.config, "NOTIONAL_PCT", 5.0)
+    _, buy = _mock_broker(mocker, equity=1000.0, buying_power="500", price=10.0)
+    state = {"positions": {}}
+
+    handled = portfolio.execute_batch([_buy("AAPL")], state, halted=True)
+
+    buy.assert_not_called()
+    assert state["positions"] == {}
+
+
+def test_a_buy_blocked_by_the_kill_switch_is_not_marked_handled(mocker, monkeypatch):
+    """Same contract as every other skip: the filing must stay retryable while
+    it is fresh, so the position opens as soon as the halt clears."""
+    monkeypatch.setattr(portfolio.config, "NOTIONAL_PCT", 5.0)
+    _mock_broker(mocker, equity=1000.0, buying_power="500", price=10.0)
+    state = {"positions": {}}
+
+    handled = portfolio.execute_batch([_buy("AAPL")], state, halted=True)
+
+    assert handled == []
+
+
+def test_halted_kill_switch_still_lets_sells_through(mocker, monkeypatch):
+    """Exits are never gated — a halt must leave risk managed, not frozen."""
+    client, _ = _mock_broker(mocker, equity=1000.0, buying_power="500", price=10.0)
+    state = {"positions": {"AAPL": {"notional": 50.0, "cost_basis": 10.0,
+                                    "entry_date": "2026-01-01",
+                                    "high_watermark": 10.0}}}
+
+    handled = portfolio.execute_batch([_sell("AAPL")], state, halted=True)
+
+    client.close_position.assert_called_once_with("AAPL")
+    assert state["positions"] == {}
+    assert [t["ticker"] for t in handled] == ["AAPL"]
+
+
+def test_not_halted_is_the_default_and_behaves_as_before(mocker, monkeypatch):
+    monkeypatch.setattr(portfolio.config, "NOTIONAL_PCT", 5.0)
+    _, buy = _mock_broker(mocker, equity=1000.0, buying_power="500", price=10.0)
+    state = {"positions": {}}
+
+    handled = portfolio.execute_batch([_buy("AAPL")], state)
+
+    buy.assert_called_once_with("AAPL", notional=50.0)
+    assert [t["ticker"] for t in handled] == ["AAPL"]
+

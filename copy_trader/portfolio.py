@@ -28,7 +28,8 @@ from alpaca.trading.requests import GetOrdersRequest
 from alpaca.trading.enums import QueryOrderStatus
 
 
-def execute_batch(new_trades: list[dict], state: dict) -> list[dict]:
+def execute_batch(new_trades: list[dict], state: dict, *,
+                  halted: bool = False) -> list[dict]:
     """Process new trades; return the subset that was actually handled.
 
     Buys open a position sized at NOTIONAL_PCT % of account equity, subject to
@@ -38,9 +39,15 @@ def execute_batch(new_trades: list[dict], state: dict) -> list[dict]:
     Sells close the held position (and count as handled even when nothing is
     held — there is nothing left to retry), and are NEVER blocked by the caps.
 
+    `halted` is the account-level kill switch (shared/kill_switch.py). It stops
+    new risk only: buys are skipped, sells still go through. Exits are never
+    gated, per the fail-open bias documented in CLAUDE.md §7 — a halt should
+    leave risk managed, not frozen.
+
     A buy that cannot execute right now (no equity figure, insufficient buying
-    power, a cap reached, no price, order rejected) is NOT handled, so the
-    caller must not mark it seen — it gets retried while the filing stays fresh.
+    power, a cap reached, a halt, no price, order rejected) is NOT handled, so
+    the caller must not mark it seen — it gets retried while the filing is
+    still fresh.
     """
     positions = state["positions"]
     handled: list[dict] = []
@@ -63,6 +70,9 @@ def execute_batch(new_trades: list[dict], state: dict) -> list[dict]:
         if txn == "buy":
             if ticker in positions:
                 handled.append(trade)  # already open — nothing to do
+                continue
+            if halted:
+                print(f"[PORTFOLIO] Skipping {ticker} — kill switch halted")
                 continue
             if notional is None:
                 continue  # equity unknown this cycle — retry later

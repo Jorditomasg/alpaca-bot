@@ -34,6 +34,7 @@ from datetime import date
 
 from shared import alpaca_client
 import shared.kill_switch as kill_switch
+import wheel.feasibility as feasibility
 import wheel.options as options_mod
 import wheel.spreads as spreads_mod
 from wheel.config import get_config
@@ -112,7 +113,20 @@ def _open_spread(state: dict, cfg) -> dict:
     candidate = spreads_mod.best_bull_put_spread(symbol, price, chain, cfg)
     if candidate is None:
         print(f"[WHEEL] No qualifying spread found for {symbol} — staying IDLE")
+        # An endless rejection streak is indistinguishable from a dead strategy
+        # in the log. Measure what the chain could actually pay and say so once.
+        warning = feasibility.observe(
+            state,
+            spreads_mod.best_reachable_score(symbol, price, chain, cfg),
+            cfg.score_threshold,
+        )
+        if warning:
+            print(warning)
+            state["feasibility_warning"] = warning
         return state
+
+    # A qualifying spread proves the config is reachable — clear the streak.
+    feasibility.observe(state, candidate["score"], cfg.score_threshold)
 
     order = spreads_mod.build_open_order(
         candidate["short_symbol"],

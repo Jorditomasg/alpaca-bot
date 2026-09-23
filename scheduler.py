@@ -7,6 +7,7 @@ Unified async scheduler. Runs bots concurrently:
   daily_summary_task   — Daily summary at market close (once per day)
 """
 import asyncio
+import functools
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 load_dotenv()
@@ -41,6 +42,14 @@ import os
 INITIAL_ALLOCATION = 0.30
 ATR_MULTIPLIER = float(os.getenv("TRAILING_ATR_MULTIPLIER", "2.5"))
 
+# After a stop-out, wait before hunting the next consensus name. Re-entering on
+# the same tick that closed the position would buy straight back into whatever
+# just broke the floor.
+REENTRY_COOLDOWN_SECONDS = int(os.getenv("TRAILING_REENTRY_COOLDOWN_SECONDS", "3600"))
+# Entry needs a live market: a market order sent at 03:00 ET queues until the
+# open and fills at an unknown price, blind to the floor we sized off.
+ENTRY_RETRY_SECONDS = int(os.getenv("TRAILING_ENTRY_RETRY_SECONDS", "300"))
+
 
 # ── Trailing Stop ──────────────────────────────────────────────────────────
 
@@ -62,68 +71,109 @@ def _refresh_kill_switch() -> bool:
     return False
 
 
-async def trailing_task():
-    s = trailing_state.load()
-    if s is None:
-        if _refresh_kill_switch():
-            print("[TRAILING] Kill switch active — skipping initial entry.")
-            return
-        print("[TRAILING] No state. Searching for consensus stock...")
+async def _open_trailing_position() -> dict | None:
+    """Pick the consensus name and open the trailing position. None on failure."""
+    if _refresh_kill_switch():
+        print("[TRAILING] Kill switch active — skipping entry.")
+        return None
+
+    print("[TRAILING] No state. Searching for consensus stock...")
+    loop = asyncio.get_running_loop()
+    try:
+        trades = await loop.run_in_executor(None, scraper.fetch_trades)
+        ticker = scorer.get_consensus_ticker(trades) or "TSLA"
+    except Exception as e:
+        print(f"[TRAILING] Could not find consensus stock: {e}")
+        ticker = "TSLA"
+
+    bp = shared_trader.get_buying_power()
+    budget = round(bp * INITIAL_ALLOCATION, 2)
+    print(f"[TRAILING] Top Consensus Stock: {ticker}. Buying ${budget}")
+
+    try:
+        shared_trader.buy(ticker, notional=budget)
+        entry = shared_trader.get_latest_price(ticker)
+        qty = round(budget / entry, 4)
+
+        s = {
+            "symbol": ticker, "entry_price": entry,
+            "position_qty": qty,
+            "floor": round(entry * 0.90, 2),
+            "trailing_active": False, "high_watermark": entry,
+            "atr": None, "atr_refreshed_at": None,
+            "atr_multiplier": ATR_MULTIPLIER,
+        }
+        # Best-effort ATR seed on entry; refreshes in on_price if it fails now.
         try:
-            loop = asyncio.get_running_loop()
-            trades = await loop.run_in_executor(None, scraper.fetch_trades)
-            ticker = scorer.get_consensus_ticker(trades) or "TSLA"
-        except Exception as e:
-            print(f"[TRAILING] Could not find consensus stock: {e}")
-            ticker = "TSLA"
-
-        bp = shared_trader.get_buying_power()
-        budget = round(bp * INITIAL_ALLOCATION, 2)
-        print(f"[TRAILING] Top Consensus Stock: {ticker}. Buying ${budget}")
-
-        try:
-            shared_trader.buy(ticker, notional=budget)
-            entry = shared_trader.get_latest_price(ticker)
-            qty = round(budget / entry, 4)
-
-            s = {
-                "symbol": ticker, "entry_price": entry,
-                "position_qty": qty,
-                "floor": round(entry * 0.90, 2),
-                "trailing_active": False, "high_watermark": entry,
-                "atr": None, "atr_refreshed_at": None,
-                "atr_multiplier": ATR_MULTIPLIER,
-            }
-            # Best-effort ATR seed on entry; refreshes in on_price if it fails now.
-            try:
-                bars = await loop.run_in_executor(
-                    None, shared_trader.get_recent_bars, ticker, 30
-                )
-                trailing_atr.refresh_atr_in_state(
-                    s, fetch_bars=lambda _: bars,
-                )
-                if s.get("atr"):
-                    print(f"[TRAILING] ATR seeded: {s['atr']} (k={ATR_MULTIPLIER})")
-            except Exception as e:
-                print(f"[TRAILING] ATR seed failed (will retry on next tick): {e}")
-
-            trailing_state.save(s)
-            _print_trailing_summary(s)
-            await tg_notifier.notify_trade(
-                strategy="trailing", side="buy", symbol=ticker,
-                notional=budget, price=entry, reason="Initial entry",
+            bars = await loop.run_in_executor(
+                None, shared_trader.get_recent_bars, ticker, 30
             )
+            trailing_atr.refresh_atr_in_state(
+                s, fetch_bars=lambda _: bars,
+            )
+            if s.get("atr"):
+                print(f"[TRAILING] ATR seeded: {s['atr']} (k={ATR_MULTIPLIER})")
         except Exception as e:
-            print(f"[TRAILING] Initial buy failed for {ticker}: {e}")
-            await tg_notifier.notify_error("trailing_task", f"Initial buy failed: {e}")
-            return
-    else:
-        ticker = s["symbol"]
-        print(f"[TRAILING] Resuming {ticker}: entry=${s['entry_price']} floor=${s['floor']}")
+            print(f"[TRAILING] ATR seed failed (will retry on next tick): {e}")
+
+        trailing_state.save(s)
+        _print_trailing_summary(s)
+        await tg_notifier.notify_trade(
+            strategy="trailing", side="buy", symbol=ticker,
+            notional=budget, price=entry, reason="Initial entry",
+        )
+        return s
+    except Exception as e:
+        print(f"[TRAILING] Initial buy failed for {ticker}: {e}")
+        await tg_notifier.notify_error("trailing_task", f"Initial buy failed: {e}")
+        return None
+
+
+async def trailing_task():
+    """Own exactly one trailing position at a time, for the life of the process.
+
+    2026-08-15: this used to be a straight line — enter once, stream forever.
+    When the AMZN floor broke, `trailing_state.clear()` left every later tick
+    returning at the `current is None` guard while the supervisor went on
+    streaming a symbol nobody held. The strategy was dead for days and only a
+    container restart would have revived it. The stream is now stoppable, so a
+    closed position ends its stream and this loop opens the next one.
+    """
+    while True:
+        s = trailing_state.load()
+        if s is None:
+            if not market_hours.is_market_open():
+                await asyncio.sleep(ENTRY_RETRY_SECONDS)
+                continue
+            s = await _open_trailing_position()
+            if s is None:
+                await asyncio.sleep(ENTRY_RETRY_SECONDS)
+                continue
+        else:
+            print(f"[TRAILING] Resuming {s['symbol']}: "
+                  f"entry=${s['entry_price']} floor=${s['floor']}")
+
+        await _stream_until_closed(s["symbol"])
+
+        if trailing_state.load() is not None:
+            # Stream ended with the position still open (should not happen —
+            # only a stop() ends it). Re-attach rather than leave it unwatched.
+            print("[TRAILING] Stream ended with a position still open — re-attaching.")
+            continue
+
+        print(f"[TRAILING] Position closed — next entry in "
+              f"{REENTRY_COOLDOWN_SECONDS // 60} min.")
+        await asyncio.sleep(REENTRY_COOLDOWN_SECONDS)
+
+
+async def _stream_until_closed(ticker: str) -> None:
+    """Block on the price stream until the position for `ticker` is closed."""
+    handle = trailing_stream.StreamHandle()
 
     async def on_price(price: float):
         current = trailing_state.load()
         if current is None:
+            await handle.astop()
             return
 
         if control.flags.is_paused("trailing"):
@@ -174,6 +224,9 @@ async def trailing_task():
                         qty=current["position_qty"], price=price, reason=action.reason,
                     )
                     trailing_state.clear()
+                    # End the stream too — otherwise it keeps a connection open
+                    # feeding a strategy with nothing left to manage.
+                    await handle.astop()
                     return
             except Exception as e:
                 print(f"[TRAILING] Action {action.type} failed: {e}")
@@ -182,7 +235,10 @@ async def trailing_task():
         trailing_state.save(current)
 
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, trailing_stream.start, ticker, on_price)
+    await loop.run_in_executor(
+        None,
+        functools.partial(trailing_stream.start, ticker, on_price, handle=handle),
+    )
 
 
 # ── Copy Trader ────────────────────────────────────────────────────────────
@@ -266,8 +322,12 @@ async def copy_task():
         )
         if new_trades:
             handled: list[dict] = []
+            # Copy was the one strategy that never asked the kill switch, and
+            # the only one holding positions when it mattered. Buys stop on a
+            # halt; the sells inside this batch and _run_copy_exits above do not.
+            halted = _refresh_kill_switch()
             try:
-                handled = portfolio.execute_batch(new_trades, state)
+                handled = portfolio.execute_batch(new_trades, state, halted=halted)
                 if handled:
                     tickers = ", ".join(t["ticker"] for t in handled[:5])
                     more = "" if len(handled) <= 5 else f" (+{len(handled)-5} more)"
@@ -364,6 +424,12 @@ async def wheel_task():
                 await tg_notifier.notify_state("wheel", "spread_closed", {
                     "profit_pct": pct, "pnl": pnl,
                 })
+
+            # The engine only ever raises this once per stuck streak; forward it
+            # so a self-retired wheel reaches a human instead of the log tail.
+            warning = state.pop("feasibility_warning", None)
+            if warning:
+                await tg_notifier.notify_warn("WHEEL", warning)
 
             wheel_state_mod.save(state)
 

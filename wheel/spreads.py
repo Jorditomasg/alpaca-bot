@@ -54,6 +54,55 @@ def best_bull_put_spread(
     Returns:
         SpreadCandidate dict or None if no qualifying spread found.
     """
+    best: SpreadCandidate | None = None
+
+    for candidate in score_candidates(symbol, current_price, chain, cfg):
+        if candidate["score"] < cfg.score_threshold:
+            print(
+                f"[SPREAD] reject {candidate['short_strike']}/{candidate['long_strike']}"
+                f"@{candidate['expiry']} score={candidate['score']:.2f} "
+                f"<{cfg.score_threshold:.2f}"
+            )
+            continue
+        if best is None or candidate["score"] > best["score"]:
+            best = candidate
+
+    if best is None:
+        print(f"[WHEEL] no decent spread today for {symbol} (all candidates scored below {cfg.score_threshold:.2f})")
+
+    return best
+
+
+def best_reachable_score(
+    symbol: str,
+    current_price: float,
+    chain: dict,
+    cfg: WheelConfig,
+) -> float | None:
+    """Best credit/max-loss available in this chain, ignoring `score_threshold`.
+
+    Distinguishes "the market paid too little today" from "this threshold is
+    unreachable at this OTM distance" — a rejection alone cannot tell the two
+    apart, and the wheel spent 3.5 months on the wrong side of that ambiguity.
+    None means nothing was quotable at all (one-sided or missing quotes), which
+    is a data problem rather than a calibration one.
+    """
+    scores = [c["score"] for c in score_candidates(symbol, current_price, chain, cfg)]
+    return max(scores) if scores else None
+
+
+def score_candidates(
+    symbol: str,
+    current_price: float,
+    chain: dict,
+    cfg: WheelConfig,
+) -> list[SpreadCandidate]:
+    """Every quotable bull put spread in the chain, scored, threshold not applied.
+
+    One candidate per expiry: the short leg is the highest strike at or below
+    `current_price * (1 - target_otm_pct)`, the long leg the widest partner
+    within `spread_width`.
+    """
     from datetime import date, datetime
 
     target_short_strike = current_price * (1.0 - cfg.target_otm_pct)
@@ -74,7 +123,7 @@ def best_bull_put_spread(
 
     if not filtered:
         print(f"[SPREAD] No puts within {cfg.target_dte_min}-{cfg.target_dte_max} DTE for {symbol}")
-        return None
+        return []
 
     # Group by expiration date
     by_expiry: dict[str, list[dict]] = {}
@@ -82,7 +131,7 @@ def best_bull_put_spread(
         key = str(c["_expiry"])
         by_expiry.setdefault(key, []).append(c)
 
-    best: SpreadCandidate | None = None
+    candidates: list[SpreadCandidate] = []
 
     for expiry_str, contracts in by_expiry.items():
         contracts_sorted = sorted(contracts, key=lambda c: float(c["strike"]))
@@ -135,13 +184,6 @@ def best_bull_put_spread(
 
         score = net_credit_dollars / max_loss_dollars
 
-        if score < cfg.score_threshold:
-            print(
-                f"[SPREAD] reject {short_strike}/{long_strike}@{expiry_str} "
-                f"score={score:.2f} <{cfg.score_threshold:.2f}"
-            )
-            continue
-
         candidate: SpreadCandidate = {
             "short_symbol": str(short_c["symbol"]),
             "short_strike": short_strike,
@@ -154,13 +196,9 @@ def best_bull_put_spread(
             "score": round(score, 4),
         }
 
-        if best is None or candidate["score"] > best["score"]:
-            best = candidate
+        candidates.append(candidate)
 
-    if best is None:
-        print(f"[WHEEL] no decent spread today for {symbol} (all candidates scored below {cfg.score_threshold:.2f})")
-
-    return best
+    return candidates
 
 
 def build_open_order(

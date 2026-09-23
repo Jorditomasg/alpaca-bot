@@ -7,6 +7,14 @@ services:
       - "7080:7080"
     env_file:
       - .env
+    # 192.168.1.1 (→ Pi-hole) stays primary; the public resolvers are fallbacks
+    # only. Without them a Pi-hole/dnscrypt-proxy restart takes the Alpaca
+    # websocket down with it — the 2026-07-30 logs held ~7,900 name-resolution
+    # failures, and a dead feed means the trailing stop stops trailing.
+    dns:
+      - 192.168.1.1
+      - 9.9.9.9
+      - 1.1.1.1
     volumes:
       - ./data:/app/data
     logging:
@@ -14,3 +22,4 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    # Sin memory limit a propósito: mismo motivo que trading-bot (backtests).

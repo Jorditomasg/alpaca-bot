@@ -778,7 +778,10 @@ def test_kill_switch_blocks_new_spread_entry(mocker, capsys, monkeypatch, tmp_pa
     import shared.kill_switch as ks
     monkeypatch.setattr(ks, "STATE_FILE", tmp_path / "ks.json")
     # Pre-trip the kill switch: peak $1000 → drop to $700 (-30%, well past 20%)
-    ks.save(ks.update(700.0, ks.update(1000.0)))
+    _s = ks.update(1000.0)
+    for _ in range(ks._confirmations()):
+        _s = ks.update(700.0, _s)
+    ks.save(_s)
 
     mock_client = MagicMock()
     # Equity must be a real float for kill_switch.update to work
@@ -799,7 +802,10 @@ def test_kill_switch_does_not_block_spread_close(mocker, monkeypatch, tmp_path):
     import wheel.engine as eng
     import shared.kill_switch as ks
     monkeypatch.setattr(ks, "STATE_FILE", tmp_path / "ks.json")
-    ks.save(ks.update(700.0, ks.update(1000.0)))
+    _s = ks.update(1000.0)
+    for _ in range(ks._confirmations()):
+        _s = ks.update(700.0, _s)
+    ks.save(_s)
 
     mock_client = MagicMock()
     mock_client.get_account.return_value = MagicMock(buying_power="10000", equity="700.0")

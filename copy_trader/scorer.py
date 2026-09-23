@@ -1,12 +1,21 @@
 """
 Scores politicians by combined metric:
-  score = win_rate × 0.40 + recency × 0.35 + volume × 0.25
+  score = win_rate × 0.50 + recency × 0.30 + volume × 0.20
 
 win_rate : fraction of buy trades where ticker is up since filed date
 recency  : normalised trades-in-last-30-days count
 volume   : normalised total trade count
 
 Returns the top politician's name.
+
+CAVEAT (2026-08-15 audit, unfixed): `win_rate` is an absolute up/down count
+against the current price, with no benchmark. In a rising market every
+politician scores near 1.0 and the term stops discriminating — the ranking then
+turns on recency and volume, i.e. it follows whoever files most, not whoever
+picks best. It is also measured over the ~3 scraped pages only, so the sample
+is whatever is on screen. Making this benchmark-relative (excess return vs SPY
+over the same window) is the single highest-value change to this module, and it
+is entry logic, so it needs the backtest gate in CLAUDE.md §1 first.
 """
 from collections import defaultdict
 from datetime import datetime, timedelta

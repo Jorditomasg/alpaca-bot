@@ -27,6 +27,18 @@ class WheelConfig:
 
 @lru_cache(maxsize=1)
 def get_config() -> WheelConfig:
+    # WARNING — the `target_otm_pct` / `score_threshold` defaults below are the
+    # values the strategy shipped with, and they can never open a trade
+    # together. `score = credit / max_loss` falls monotonically as the short
+    # strike moves out of the money, so 10% OTM caps the reachable score at
+    # ~0.09 while the threshold asks for 0.30 (measured on the live SOFI chain,
+    # 2026-08-15). The account ran 3.5 months at `cycles: 0` because of it.
+    #
+    # They are left untouched here on purpose: picking premium-vs-assignment
+    # risk is a risk decision and CLAUDE.md §1 gates selection logic behind a
+    # backtest. The live override lives in `.env`. If you deploy this elsewhere,
+    # set both there too — and read docs/2026-08-15-trading-audit.md first.
+    # wheel/feasibility.py will warn if the pair goes unreachable again.
     width = float(os.getenv("WHEEL_SPREAD_WIDTH", "2"))
     default_min_bp = width * 100 * 2
     return WheelConfig(
