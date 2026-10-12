@@ -108,7 +108,8 @@ def execute_batch(new_trades: list[dict], state: dict, *,
             handled.append(trade)
         elif txn == "sell":
             if ticker in positions:
-                close_position(ticker, state)
+                if not close_position(ticker, state):
+                    continue  # still held at the broker — retry next cycle
                 positions.pop(ticker, None)
             handled.append(trade)
 
@@ -162,8 +163,8 @@ def close_and_remove(ticker: str, state: dict) -> None:
     positions = state.get("positions", {})
     if ticker not in positions:
         return
-    close_position(ticker, state)
-    positions.pop(ticker, None)
+    if close_position(ticker, state):
+        positions.pop(ticker, None)
 
 
 def _safe_latest_price(ticker: str) -> float | None:
@@ -192,11 +193,22 @@ def _cancel_pending(client, symbol: str) -> None:
         pass
 
 
-def close_position(ticker: str, state: dict) -> None:
+def close_position(ticker: str, state: dict) -> bool:
+    """Close `ticker` at the broker. True when nothing is left to close.
+
+    False means the close failed and the shares are still held: callers must
+    keep the position in local state so the exit is retried, instead of
+    dropping it and leaving an unwatched position at the broker.
+    """
     client = alpaca_client.trading()
     try:
         _cancel_pending(client, ticker)
         client.close_position(ticker)
         print(f"[PORTFOLIO] Closed position {ticker}")
+        return True
     except Exception as e:
+        if "40410000" in str(e) or "position does not exist" in str(e).lower():
+            print(f"[PORTFOLIO] {ticker} already flat at the broker — dropping it")
+            return True
         print(f"[PORTFOLIO] Close failed {ticker}: {e}")
+        return False

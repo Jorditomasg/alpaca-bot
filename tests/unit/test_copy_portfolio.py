@@ -369,3 +369,49 @@ def test_closing_a_copy_position_never_cancels_another_strategys_multileg_order(
 
     client.cancel_order_by_id.assert_called_once_with("own-stop")
     client.close_position.assert_called_once_with("V")
+
+
+# ── A failed broker close must not drop the position from local state ───────
+# Regression: close_position swallowed the error and callers popped the
+# position anyway, leaving shares at the broker that no exit rule watched.
+
+
+def test_failed_close_keeps_position_and_leaves_sell_unhandled(mocker, monkeypatch):
+    monkeypatch.setattr(portfolio.config, "NOTIONAL_PCT", 5.0)
+    client, _ = _mock_broker(mocker)
+    client.close_position.side_effect = RuntimeError("HTTP 500")
+    state = {"positions": {
+        "TSLA": {"notional": 50.0, "entry_date": "2026-05-01",
+                 "cost_basis": 200.0, "high_watermark": 210.0},
+    }}
+
+    handled = portfolio.execute_batch([_sell("TSLA")], state)
+
+    assert "TSLA" in state["positions"]  # still tracked → retried next cycle
+    assert handled == []
+
+
+def test_close_and_remove_keeps_position_on_failure(mocker):
+    client, _ = _mock_broker(mocker)
+    client.close_position.side_effect = RuntimeError("HTTP 500")
+    state = {"positions": {"PG": {"notional": 27.0, "entry_date": "2026-05-13",
+                                  "cost_basis": 144.0, "high_watermark": 150.0}}}
+
+    portfolio.close_and_remove("PG", state)
+
+    assert "PG" in state["positions"]
+
+
+def test_close_of_position_already_gone_at_broker_drops_it(mocker):
+    """Broker says the position does not exist → nothing left to close; drop
+    it instead of retrying forever."""
+    client, _ = _mock_broker(mocker)
+    client.close_position.side_effect = RuntimeError(
+        '{"code":40410000,"message":"position does not exist"}'
+    )
+    state = {"positions": {"PG": {"notional": 27.0, "entry_date": "2026-05-13",
+                                  "cost_basis": 144.0, "high_watermark": 150.0}}}
+
+    portfolio.close_and_remove("PG", state)
+
+    assert "PG" not in state["positions"]

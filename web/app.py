@@ -17,7 +17,8 @@ def _read(path: str) -> dict:
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    # Starlette >= 1.x removed the (name, {"request": ...}) signature.
+    return templates.TemplateResponse(request, "index.html")
 
 
 @app.get("/api/status")

@@ -122,10 +122,10 @@ def test_spread_summary_with_live_mid(mocker, capsys):
     summ.print_summary(state)
 
     out = capsys.readouterr().out
-    # spread_mid = short_bid - long_ask = 0.15 - 0.05 = 0.10
-    # unrealised = (net_credit_per_share - current_mid) * 100 = (0.50 - 0.10)*100 = 40.0
-    assert "0.1000" in out or "0.10" in out   # current mid
-    assert "40.00" in out                      # unrealised P&L
+    # close cost = short mid - long mid = 0.165 - 0.045 = 0.12
+    # unrealised = (net_credit_per_share - current_mid) * 100 = (0.50 - 0.12)*100 = 38.0
+    assert "0.1200" in out                     # current mid
+    assert "38.00" in out                      # unrealised P&L
 
 
 # ── CSP backward-compatibility ────────────────────────────────────────────────

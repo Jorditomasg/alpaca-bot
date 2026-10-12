@@ -4,6 +4,7 @@ Unified entry point. Starts:
   - Trailing stop bot          (WebSocket stream)
   - Copy trader                (polls Capitol Trades every 4h)
   - Wheel strategy             (runs every 15min during market hours)
+  - ETF rotation               (weekly, ROTATION_ENABLED)
   - Daily summary scheduler    (once per trading day at close)
   - Telegram bot poller        (no-op if TELEGRAM_BOT_TOKEN unset)
 """
@@ -13,7 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from web.app import app as web_app
-from scheduler import trailing_task, copy_task, wheel_task, daily_summary_task
+from scheduler import trailing_task, copy_task, wheel_task, rotation_task, daily_summary_task
 from telegram_bot.poller import run_poller
 
 
@@ -36,6 +37,7 @@ async def main():
         trailing_task(),
         copy_task(),
         wheel_task(),
+        rotation_task(),
         daily_summary_task(),
         run_poller(),
     )

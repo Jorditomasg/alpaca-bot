@@ -9,7 +9,7 @@ import re
 import time
 import hashlib
 import httpx
-from datetime import datetime
+from datetime import datetime, timedelta
 
 _BASE = "https://www.capitoltrades.com"
 
@@ -25,9 +25,14 @@ _HEADERS = {
 
 _PARTY_RE = re.compile(r"(Republican|Democrat|Independent|Libertarian)")
 _TICKER_RE = re.compile(r"([A-Z]{1,6}):[A-Z]{2,3}$")
-_DATE_RE = re.compile(r"(\d{1,2})\s+([A-Za-z]{3})(\d{4})")
+# Live format is "22 Sept 2026" (4-letter "Sept", space before the year);
+# older markup glued it ("10 Mar2026"). Both must parse.
+_DATE_RE = re.compile(r"(\d{1,2})\s+([A-Za-z]{3,9})\.?\s*(\d{4})")
+# Recent filings show a relative publication date: "13:02 Today", "20:15 Yesterday".
+_RELATIVE_RE = re.compile(r"\b(Today|Yesterday)\b", re.IGNORECASE)
+# Ranges use an EN DASH on the live site ("1K–15K"); accept hyphen/en/em dash.
 _AMOUNT_RE = re.compile(
-    r"\$?\s*(\d+(?:\.\d+)?)\s*([KkMm])\s*-\s*\$?\s*(\d+(?:\.\d+)?)\s*([KkMm])"
+    r"\$?\s*(\d+(?:\.\d+)?)\s*([KkMm])\s*[-\u2013\u2014]\s*\$?\s*(\d+(?:\.\d+)?)\s*([KkMm])"
 )
 
 
@@ -161,12 +166,23 @@ def _to_dollars(num: str, unit: str) -> int:
     return int(float(num) * mult)
 
 
-def _parse_date(raw: str) -> str:
-    m = _DATE_RE.search(raw)
+def _now() -> datetime:
+    return datetime.now()
+
+
+def _parse_date(raw: str, now: datetime | None = None) -> str:
+    rel = _RELATIVE_RE.search(raw or "")
+    if rel:
+        day = (now or _now()).date()
+        if rel.group(1).lower() == "yesterday":
+            day -= timedelta(days=1)
+        return day.strftime("%Y-%m-%d")
+    m = _DATE_RE.search(raw or "")
     if not m:
         return ""
     try:
-        dt = datetime.strptime(f"{m.group(1)} {m.group(2)} {m.group(3)}", "%d %b %Y")
+        # "Sept"/"June"/"July" → first three letters is the %b abbreviation.
+        dt = datetime.strptime(f"{m.group(1)} {m.group(2)[:3]} {m.group(3)}", "%d %b %Y")
         return dt.strftime("%Y-%m-%d")
     except ValueError:
         return ""

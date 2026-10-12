@@ -4,7 +4,7 @@ Public API:
   best_bull_put_spread(symbol, current_price, chain, cfg) -> dict | None
   build_open_order(short_symbol, long_symbol, limit_credit) -> LimitOrderRequest
   build_close_order(short_symbol, long_symbol, limit_debit) -> LimitOrderRequest
-  spread_mid_price(short_bid, long_ask) -> float
+  spread_close_cost(short_quote, long_quote) -> float | None
 
 Chain format expected by best_bull_put_spread:
   {
@@ -208,13 +208,17 @@ def build_open_order(
 ) -> LimitOrderRequest:
     """Build a bull put spread opening order (sell-to-open short, buy-to-open long).
 
-    The limit_price is the net credit received, expressed positive on a SELL mleg.
+    Alpaca prices a multi-leg order as a NET amount: positive = debit paid,
+    negative = credit received. The credit is therefore sent NEGATIVE. Sending
+    it positive meant "willing to pay up to X", which filled every open the
+    same second at whatever credit the market offered (2026-08-17: limit 0.36
+    → filled -0.20; 2026-09-24: limit 0.27 → filled -0.22).
     """
     return LimitOrderRequest(
         qty=1,
         order_class=OrderClass.MLEG,
         time_in_force=TimeInForce.DAY,
-        limit_price=round(limit_credit, 2),
+        limit_price=-round(abs(limit_credit), 2),
         legs=[
             OptionLegRequest(
                 symbol=short_symbol,
@@ -263,15 +267,27 @@ def build_close_order(
     )
 
 
-def spread_mid_price(short_bid: float, long_ask: float) -> float:
-    """Compute the conservative current cost-to-close a bull put spread.
+def spread_close_cost(short_quote: dict, long_quote: dict) -> float | None:
+    """Per-share cost to close a bull put spread at the mid: short mid - long mid.
 
-    Uses short_bid (what we receive to close the short) minus long_ask
-    (what we pay to close the long). This is conservative: it values the
-    closing cost, not the opening credit. A lower value means more profit
-    for a credit spread we sold to open.
+    The previous formula, short_bid - long_ask, was documented as conservative
+    but is the most OPTIMISTIC price available — below the mid by both
+    half-spreads (the real "natural" cost is short_ask - long_bid). Limit
+    orders at that price almost never filled: 7 of 9 profit-take orders between
+    2026-08-20 and 2026-09-25 expired unfilled.
+
+    Returns None when the short leg is one-sided/stale (bid or ask <= 0) or the
+    long leg has no ask, since either would fake a near-zero close cost. A long
+    leg with bid 0 is normal for a far-OTM put and still prices fine.
     """
-    return short_bid - long_ask
+    try:
+        s_bid, s_ask = float(short_quote["bid"]), float(short_quote["ask"])
+        l_bid, l_ask = float(long_quote["bid"]), float(long_quote["ask"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if s_bid <= 0 or s_ask <= 0 or l_ask <= 0 or l_bid < 0:
+        return None
+    return (s_bid + s_ask) / 2.0 - (l_bid + l_ask) / 2.0
 
 
 # ── internal helpers ─────────────────────────────────────────────────────────

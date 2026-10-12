@@ -85,12 +85,14 @@ def _print_spread_summary(wheel_state: dict) -> None:
                 long_resp = client.get_option_latest_quote(
                     OptionLatestQuoteRequest(symbol_or_symbols=long_sym)
                 )
-                short_bid = float(short_resp[short_sym].bid_price)
-                long_ask  = float(long_resp[long_sym].ask_price)
-                from wheel.spreads import spread_mid_price
-                current_mid = spread_mid_price(short_bid, long_ask)
+                from wheel.spreads import spread_close_cost
+                current_mid = spread_close_cost(
+                    {"bid": short_resp[short_sym].bid_price, "ask": short_resp[short_sym].ask_price},
+                    {"bid": long_resp[long_sym].bid_price, "ask": long_resp[long_sym].ask_price},
+                )
                 # Unrealised P&L: credit received minus current cost to close (per spread)
-                unrealised_pnl = (net_credit / 100.0 - current_mid) * 100.0
+                if current_mid is not None:
+                    unrealised_pnl = (net_credit / 100.0 - current_mid) * 100.0
             except Exception:
                 pass
 

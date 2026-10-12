@@ -4,7 +4,7 @@ If only one fixture is available (sofi_synthetic.json), this test is skipped.
 Once a second fixture is captured (e.g. sofi_20260515.json), both fixtures are
 loaded and the test simulates a SPREAD_OPEN state across the two snapshots,
 verifying that the unrealised P&L calculation is consistent with the
-spread_mid_price formula.
+spread_close_cost formula.
 
 To generate a second fixture:
     python -m wheel.tools.capture_chain SOFI
@@ -12,7 +12,7 @@ To generate a second fixture:
 import json
 import pathlib
 import pytest
-from wheel.spreads import best_bull_put_spread, spread_mid_price
+from wheel.spreads import best_bull_put_spread, spread_close_cost
 from wheel.config import get_config
 
 FIXTURES_DIR = pathlib.Path(__file__).parent.parent / "fixtures" / "option_chains"
@@ -57,9 +57,9 @@ def test_pnl_walk_across_snapshots():
         if sc is None or lc is None:
             continue  # contract may have expired or rolled off the chain
 
-        short_bid = float(sc["bid"])
-        long_ask  = float(lc["ask"])
-        current_mid = spread_mid_price(short_bid, long_ask)
+        current_mid = spread_close_cost(sc, lc)
+        if current_mid is None:
+            continue  # one-sided quote in this snapshot
 
         # Unrealised P&L per spread = (net_credit_per_share - current_cost) * 100
         unrealised_pnl = (net_credit / 100.0 - current_mid) * 100.0

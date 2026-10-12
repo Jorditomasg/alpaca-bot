@@ -227,8 +227,9 @@ def test_idle_to_spread_opening_then_open_on_fill(mocker, monkeypatch):
     assert result["total_premium"] == 0.0
     mock_client.submit_order.assert_called_once()
 
-    # Fill confirmed at $0.48/share → credit booked from the actual fill
-    mock_client.get_order_by_id.return_value = _order_mock("filled", "0.48")
+    # Fill confirmed at $0.48/share credit → Alpaca reports mleg credits as a
+    # NEGATIVE filled_avg_price; it must still be booked from the actual fill.
+    mock_client.get_order_by_id.return_value = _order_mock("filled", "-0.48")
     result = eng.run_cycle(result)
 
     assert result["stage"] == "SPREAD_OPEN"

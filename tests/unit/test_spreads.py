@@ -7,7 +7,7 @@ from wheel.spreads import (
     best_reachable_score,
     build_open_order,
     build_close_order,
-    spread_mid_price,
+    spread_close_cost,
 )
 from wheel.config import get_config
 
@@ -351,7 +351,10 @@ def test_best_reachable_score_ignores_the_threshold_entirely(default_cfg):
 def test_build_open_order_shape():
     order = build_open_order("SOFI260117P00009000", "SOFI260117P00007000", 0.30)
     assert order.order_class == OrderClass.MLEG
-    assert order.limit_price == 0.30
+    # Alpaca mleg convention: negative limit = net CREDIT received. A positive
+    # limit means "willing to PAY up to", which filled every open instantly at
+    # whatever credit the market gave (2026-08-17: limit 0.36 → filled -0.20).
+    assert order.limit_price == -0.30
     assert len(order.legs) == 2
 
     short_leg = order.legs[0]
@@ -386,10 +389,31 @@ def test_build_close_order_shape():
 
 def test_build_open_order_limit_price_rounded():
     order = build_open_order("X", "Y", 0.3456789)
-    assert order.limit_price == 0.35
+    assert order.limit_price == -0.35
 
 
-def test_spread_mid_price():
-    """spread_mid_price = short_bid - long_ask (conservative close cost)."""
-    # short bid=0.20, long ask=0.08 → mid = 0.12
-    assert spread_mid_price(0.20, 0.08) == pytest.approx(0.12, abs=0.001)
+def test_build_open_order_credit_sign_is_idempotent():
+    """Callers may pass the credit as a positive or already-negative number."""
+    assert build_open_order("X", "Y", -0.27).limit_price == -0.27
+
+
+def test_spread_close_cost_is_the_mid_of_both_legs():
+    """Cost to close = short mid - long mid. The old short_bid - long_ask was
+    the most OPTIMISTIC price (below mid by both half-spreads), so 7 of 9 close
+    orders between 2026-08-20 and 09-25 expired unfilled."""
+    short = {"bid": 0.31, "ask": 0.32}
+    long_ = {"bid": 0.04, "ask": 0.05}
+    assert spread_close_cost(short, long_) == pytest.approx(0.27, abs=0.001)
+
+
+def test_spread_close_cost_rejects_unquotable_short_leg():
+    """A one-sided/stale short quote would fake a near-zero close cost and fire
+    the profit-take at a nonsensical limit."""
+    assert spread_close_cost({"bid": 0.0, "ask": 0.30}, {"bid": 0.04, "ask": 0.05}) is None
+    assert spread_close_cost({"bid": 0.30, "ask": 0.0}, {"bid": 0.04, "ask": 0.05}) is None
+
+
+def test_spread_close_cost_allows_worthless_long_leg():
+    """A far-OTM long leg commonly quotes bid 0 — still closable."""
+    assert spread_close_cost({"bid": 0.10, "ask": 0.12}, {"bid": 0.0, "ask": 0.02}) == pytest.approx(0.10, abs=0.001)
+    assert spread_close_cost({"bid": 0.10, "ask": 0.12}, {"bid": 0.0, "ask": 0.0}) is None

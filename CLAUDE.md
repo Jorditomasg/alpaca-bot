@@ -1,13 +1,13 @@
 # Alpaca Bot — Project Rules
 
-This is a paper-trading bot running three independent strategies (trailing,
-copy, wheel) over a single Alpaca account. Real (or paper) money is at risk on
+This is a paper-trading bot running four independent strategies (trailing,
+copy, wheel, rotation) over a single Alpaca account. Real (or paper) money is at risk on
 every change. The following rules are MANDATORY.
 
 ## 1. Profitability gate — backtest before changing trading logic
 
 **Any change that touches entry, exit, scoring, sizing, or filter logic in
-`copy_trader/`, `trailing/`, `wheel/`, or `scheduler.py` MUST be validated with
+`copy_trader/`, `trailing/`, `wheel/`, `rotation/`, or `scheduler.py` MUST be validated with
 a backtest before being merged.**
 
 The flow is non-negotiable:
@@ -103,6 +103,13 @@ needs. The wheel strategy needs $400+ for spreads or $40k+ for CSP. The
 trailing strategy needs ~30% of buying power for the initial entry plus ladder
 buys. The copy strategy rebalances across N filtered positions.
 
+**Rotation (since 2026-10-12)** is the sink for idle cash: it holds at most
+`ROTATION_ALLOC_PCT` (0.5) of equity, never spends below a cash reserve of
+`ROTATION_RESERVE_PCT` (0.30) of equity — that reserve is what keeps trailing's
+next 30 %-of-buying-power entry and the wheel funded — and never picks or trades
+a symbol held by trailing or copy. Backtest + rationale:
+`docs/2026-10-12-rotation.md` (`python -m backtest.rotation_backtest`).
+
 Currently the paper account is ~$1000. If the change shifts allocation, run
 the full pipeline (not just backtest) in paper for at least one trading day
 before merging.
@@ -171,3 +178,14 @@ network or a wall-clock wait (`tests/unit/test_stream.py`).
 `docker-compose.yml` also pins DNS fallbacks (`192.168.1.1` primary → Pi-hole,
 then `9.9.9.9` / `1.1.1.1`) so a Pi-hole restart on the host no longer takes the
 feed down with it.
+
+## 9. Multi-leg (mleg) prices are SIGNED — negative is a credit
+
+Alpaca prices a multi-leg order as one net amount: **positive = debit paid,
+negative = credit received**. Both `limit_price` on submit and
+`filled_avg_price` on the fill follow it. Until 2026-10-02 the wheel sent its
+opening credit positive ("willing to pay up to X"), so every spread filled
+instantly at whatever the market offered, and booked the limit instead of the
+(negative) fill. Verify any new mleg order against a real order in
+`/v2/orders?status=all&nested=true` before trusting its sign. Details:
+`docs/known-limitations.md` (2026-10-02 review).

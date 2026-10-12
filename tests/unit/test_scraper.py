@@ -175,3 +175,58 @@ def test_parsed_trade_includes_numeric_amount_mid():
     assert trade["amount_low"] == 15_000
     assert trade["amount_high"] == 50_000
     assert trade["amount_mid"] == 32_500
+
+
+# ── Live formats (regression: 2026-10-02) ───────────────────────────────────
+# capitoltrades.com renders traded dates as "22 Sept 2026" (space before the
+# year, 4-letter "Sept"), recent publication dates as "13:02 Today" /
+# "20:15 Yesterday", and amount ranges with an EN DASH ("1K–15K"). The old
+# regexes matched none of these, so every trade parsed with empty dates and
+# amount 0: the copier dropped every buy and every politician scored 0.450.
+
+from datetime import datetime as _dt
+from pathlib import Path as _Path
+
+_NOW = _dt(2026, 10, 2, 21, 18)
+
+
+def test_parse_date_live_format_with_space_and_four_letter_month():
+    assert scraper._parse_date("22 Sept 2026") == "2026-09-22"
+    assert scraper._parse_date("4 Sept 2026") == "2026-09-04"
+    assert scraper._parse_date("1 June 2026") == "2026-06-01"
+    assert scraper._parse_date("15 Oct 2026") == "2026-10-15"
+
+
+def test_parse_date_legacy_glued_format_still_works():
+    assert scraper._parse_date("10 Mar2026") == "2026-03-10"
+
+
+def test_parse_date_relative_today_and_yesterday():
+    assert scraper._parse_date("13:02 Today", now=_NOW) == "2026-10-02"
+    assert scraper._parse_date("20:15 Yesterday", now=_NOW) == "2026-10-01"
+
+
+def test_parse_date_garbage_returns_empty():
+    assert scraper._parse_date("N/A") == ""
+    assert scraper._parse_date("") == ""
+
+
+def test_parse_amount_range_en_dash():
+    assert scraper._parse_amount_range("1K–15K") == (1_000, 15_000)
+    assert scraper._parse_amount_range("50K–100K") == (50_000, 100_000)
+    assert scraper._parse_amount_range("1M—5M") == (1_000_000, 5_000_000)
+
+
+def test_live_page_fixture_parses_dates_and_amounts(monkeypatch):
+    """Every trade on a real page must come out with dates and a non-zero amount."""
+    html = (_Path(__file__).parent.parent / "fixtures" / "capitoltrades_page1_20261002.html").read_text()
+    monkeypatch.setattr(scraper, "_get_html", lambda client, page=1, retries=3: html)
+    monkeypatch.setattr(scraper, "_now", lambda: _NOW)
+
+    trades = scraper.fetch_trades(pages=1)
+
+    assert trades, "fixture should yield trades"
+    for t in trades:
+        assert t["traded_date"].startswith("2026-"), t
+        assert t["pub_date"] == "2026-10-02", t
+        assert t["amount_mid"] > 0, t

@@ -4,6 +4,7 @@ Unified async scheduler. Runs bots concurrently:
   trailing_task        — WebSocket price stream (always on)
   copy_task            — Capitol Trades polling every 4h
   wheel_task           — Wheel strategy every 15min during market hours
+  rotation_task        — Weekly ETF momentum rotation of idle cash (ROTATION_ENABLED)
   daily_summary_task   — Daily summary at market close (once per day)
 """
 import asyncio
@@ -33,6 +34,9 @@ import wheel.state   as wheel_state_mod
 import wheel.engine  as wheel_engine
 import wheel.monitor as wheel_monitor
 import wheel.summary as wheel_summary
+import rotation.config as rotation_config
+import rotation.engine as rotation_engine
+import rotation.state as rotation_state
 from telegram_bot import notifier as tg_notifier
 from telegram_bot import client as tg_client
 from telegram_bot.formatter import html_escape
@@ -79,12 +83,18 @@ async def _open_trailing_position() -> dict | None:
 
     print("[TRAILING] No state. Searching for consensus stock...")
     loop = asyncio.get_running_loop()
+    # No consensus → no entry; the caller retries in ENTRY_RETRY_SECONDS.
+    # This used to fall back to a hardcoded "TSLA", which on 2026-10-01 bought
+    # 30 % of buying power on a scrape that had returned 0 trades.
     try:
         trades = await loop.run_in_executor(None, scraper.fetch_trades)
-        ticker = scorer.get_consensus_ticker(trades) or "TSLA"
+        ticker = scorer.get_consensus_ticker(trades)
     except Exception as e:
-        print(f"[TRAILING] Could not find consensus stock: {e}")
-        ticker = "TSLA"
+        print(f"[TRAILING] Could not find consensus stock: {e} — skipping entry")
+        return None
+    if not ticker:
+        print(f"[TRAILING] No consensus stock ({len(trades)} trades scraped) — skipping entry")
+        return None
 
     bp = shared_trader.get_buying_power()
     budget = round(bp * INITIAL_ALLOCATION, 2)
@@ -441,6 +451,61 @@ async def wheel_task():
             await tg_notifier.notify_error("wheel_task", str(e))
 
         await asyncio.sleep(MONITOR_INTERVAL)
+
+
+# ── ETF Rotation ────────────────────────────────────────────────────────────
+
+def _symbols_held_by_other_strategies() -> set[str]:
+    """Names the rotation must never pick or trade: they belong to trailing/copy."""
+    held: set[str] = set()
+    t = trailing_state.load()
+    if t and t.get("symbol"):
+        held.add(t["symbol"])
+    held.update((copy_state_mod.load().get("positions") or {}).keys())
+    return held
+
+
+async def rotation_task():
+    """Weekly momentum rotation over a diversified ETF universe.
+
+    Deploys the cash the other strategies leave idle (~55 % of equity on
+    2026-10-12). Rebalances once per ISO week, on the first check with the
+    market open (Alpaca clock — holiday-aware) after 10:00 ET, using adjusted
+    closes up to the previous session. Backtest: docs/2026-10-12-rotation.md.
+    """
+    CHECK_INTERVAL = 5 * 60
+    loop = asyncio.get_running_loop()
+    while True:
+        cfg = rotation_config.load()
+        try:
+            if cfg.enabled:
+                await control.flags.wait_if_paused("rotation")
+                now = market_hours.now_et()
+                state = rotation_state.load()
+                if (now.hour >= 10 and rotation_engine.due(state, now.date())
+                        and await loop.run_in_executor(None, rotation_engine.market_open_now)):
+                    halted = await loop.run_in_executor(None, _refresh_kill_switch)
+                    exclude = await loop.run_in_executor(None, _symbols_held_by_other_strategies)
+                    broker = rotation_engine.alpaca_broker()
+                    res = await loop.run_in_executor(None, functools.partial(
+                        rotation_engine.run_rebalance, cfg, broker, now.date(), exclude, halted))
+                    state.update({
+                        "last_rebalance_week": rotation_engine.iso_week(now.date()),
+                        "last_rebalance_at": now.isoformat(),
+                        "last_weights": res["weights"],
+                        "last_budget": res["budget"],
+                        "last_orders": res["orders"],
+                        "rebalances": state.get("rebalances", 0) + 1,
+                    })
+                    rotation_state.save(state)
+                    for side, sym, amt in res["orders"]:
+                        await tg_notifier.notify_trade(
+                            "rotation", side, sym, notional=amt.get("notional"),
+                            qty=amt.get("qty"), reason="rebalanceo semanal")
+        except Exception as e:
+            print(f"[ROTATION] task error: {e}")
+            await tg_notifier.notify_error("rotation_task", str(e))
+        await asyncio.sleep(CHECK_INTERVAL)
 
 
 # ── Daily Summary ───────────────────────────────────────────────────────────

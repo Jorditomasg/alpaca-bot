@@ -68,8 +68,12 @@ def test_paper_mleg_order_accepted_and_cancelled():
     if long_c is None:
         pytest.skip("Could not find a long leg below the short strike — SOFI chain too narrow today")
 
-    # Submit far-OTM spread with a very low limit credit (unlikely to fill, safe to cancel)
-    order = build_open_order(short_c.symbol, long_c.symbol, limit_credit=0.01)
+    # Ask for a credit close to the full spread width — far above anything a
+    # far-OTM spread pays, so it cannot fill and is safe to cancel. (A tiny
+    # credit like 0.01 WOULD fill: build_open_order sends credits negative, as
+    # Alpaca's mleg convention requires.)
+    width = float(short_c.strike_price) - float(long_c.strike_price)
+    order = build_open_order(short_c.symbol, long_c.symbol, limit_credit=round(width * 0.95, 2))
     submitted = trading.submit_order(order)
 
     assert submitted is not None

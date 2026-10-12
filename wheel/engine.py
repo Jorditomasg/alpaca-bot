@@ -174,9 +174,12 @@ def _check_spread_opening(state: dict) -> dict:
         return state  # API hiccup — poll again next cycle
 
     if status == "filled":
-        if filled_price is not None and filled_price > 0:
+        if filled_price:
             # Replace the limit estimate with the actual net credit per share.
-            state["net_credit"] = round(filled_price * 100, 2)
+            # Alpaca reports an mleg credit as a NEGATIVE price; the old
+            # `> 0` guard skipped every real fill and kept the (higher) limit
+            # as the booked credit.
+            state["net_credit"] = round(abs(filled_price) * 100, 2)
             state["max_loss"] = round(
                 state.get("spread_width", 0.0) * 100 - state["net_credit"], 2
             )
@@ -209,7 +212,7 @@ def _check_spread_closing(state: dict) -> dict:
 
     if status == "filled":
         net_credit = state.get("net_credit", 0.0)
-        debit = round(filled_price * 100, 2) if filled_price else 0.0
+        debit = round(abs(filled_price) * 100, 2) if filled_price else 0.0
         realized = round(net_credit - debit, 2)
         # Credit was booked at open fill; replace it with the actual P&L.
         state["total_premium"] += realized - net_credit
@@ -312,16 +315,17 @@ def _check_spread(state: dict, cfg) -> dict:
     short_quote = _get_option_quote(short_sym)
     long_quote  = _get_option_quote(long_sym)
 
+    current_cost = None
     if short_quote is not None and long_quote is not None:
-        # Conservative current close cost: short_bid - long_ask
-        current_cost = spreads_mod.spread_mid_price(short_quote["bid"], long_quote["ask"])
+        current_cost = spreads_mod.spread_close_cost(short_quote, long_quote)
+    if current_cost is not None:
         profit_target_per_share = (net_credit / 100) * (1.0 - cfg.profit_target_pct / 100.0)
 
         if current_cost <= profit_target_per_share:
             close_order = spreads_mod.build_close_order(
                 short_sym,
                 long_sym,
-                round(current_cost, 2),
+                max(round(current_cost, 2), 0.01),  # a close is always a debit
             )
             client = alpaca_client.trading()
             try:
